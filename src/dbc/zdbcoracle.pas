@@ -145,6 +145,7 @@ type
     function GetHostVersion: Integer; override;
     function GetBinaryEscapeString(const Value: TBytes): String; overload; override;
     function GetBinaryEscapeString(const Value: RawByteString): String; overload; override;
+    function GetServerProvider: TZServerProvider; override;
   end;
 
   TZOracleSequence = class(TZAbstractSequence)
@@ -169,7 +170,7 @@ implementation
 
 uses
   ZMessages, ZGenericSqlToken, ZDbcOracleStatement, ZSysUtils, ZFastCode,
-  ZDbcOracleUtils, ZDbcOracleMetadata, ZOracleToken, ZOracleAnalyser;
+  ZDbcOracleUtils, ZDbcOracleMetadata, ZOracleToken, ZOracleAnalyser, ZDbcProperties;
 
 { TZOracleDriver }
 
@@ -237,9 +238,7 @@ end;
 }
 function TZOracleDriver.GetTokenizer: IZTokenizer;
 begin
-  if Tokenizer = nil then
-    Tokenizer := TZOracleTokenizer.Create;
-  Result := Tokenizer;
+  Result := TZOracleTokenizer.Create; { thread save! Allways return a new Tokenizer! }
 end;
 
 {**
@@ -248,9 +247,7 @@ end;
 }
 function TZOracleDriver.GetStatementAnalyser: IZStatementAnalyser;
 begin
-  if Analyser = nil then
-    Analyser := TZOracleStatementAnalyser.Create;
-  Result := Analyser;
+  Result := TZOracleStatementAnalyser.Create; { thread save! Allways return a new Analyser! }
 end;
 
 { TZOracleConnection }
@@ -269,14 +266,14 @@ begin
   AutoCommit := True;
   TransactIsolationLevel := tiNone;
 
-  if Info.Values['ServerCachedStmts'] = '' then
+  if Info.Values[ConnProps_ServerCachedStmts] = '' then
     FStmtMode := OCI_STMT_CACHE //use by default
   else
-    if StrToBoolEx(Info.Values['ServerCachedStmts'], False) then
+    if StrToBoolEx(Info.Values[ConnProps_ServerCachedStmts], False) then
       FStmtMode := OCI_STMT_CACHE //use by default
     else
       FStmtMode := OCI_DEFAULT;
-  FStatementPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(Info.Values['StatementCache'], 30); //default = 20
+  FStatementPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(Info.Values[ConnProps_StatementCache], 30); //default = 20
   FBlobPrefetchSize := FChunkSize;
   Open;
 end;
@@ -737,6 +734,11 @@ begin
   Result := FServerHandle;
 end;
 
+function TZOracleConnection.GetServerProvider: TZServerProvider;
+begin
+  Result := spOracle;
+end;
+
 {**
   Gets a reference to Oracle session handle.
   @return a reference to Oracle session handle.
@@ -831,9 +833,9 @@ var
 begin
   Statement := Connection.CreateStatement;
   ResultSet := Statement.ExecuteQuery(
-    Format('SELECT %s.CURRVAL FROM DUAL', [Name]));
+    GetCurrentValueSQL);
   if ResultSet.Next then
-    Result := ResultSet.GetLong(1)
+    Result := ResultSet.GetLong(FirstDbcIndex)
   else
     Result := inherited GetCurrentValue;
   ResultSet.Close;
@@ -842,7 +844,7 @@ end;
 
 function TZOracleSequence.GetCurrentValueSQL: String;
 begin
- result:=Format('SELECT %s.CURRVAL FROM DUAL', [Name]);
+  Result := Format('SELECT %s.CURRVAL FROM DUAL', [Name]);
 end;
 
 {**
@@ -856,9 +858,9 @@ var
 begin
   Statement := Connection.CreateStatement;
   ResultSet := Statement.ExecuteQuery(
-    Format('SELECT %s.NEXTVAL FROM DUAL', [Name]));
+    GetNextValueSQL);
   if ResultSet.Next then
-    Result := ResultSet.GetLong(1)
+    Result := ResultSet.GetLong(FirstDbcIndex)
   else
     Result := inherited GetNextValue;
   ResultSet.Close;
@@ -868,7 +870,7 @@ end;
 
 function TZOracleSequence.GetNextValueSQL: String;
 begin
- result:=Format('SELECT %s.NEXTVAL FROM DUAL', [Name]);
+  Result := Format('SELECT %s.NEXTVAL FROM DUAL', [Name]);
 end;
 
 { TZOracleCachedResolver }

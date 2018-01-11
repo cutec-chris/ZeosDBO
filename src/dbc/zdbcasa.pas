@@ -1,7 +1,7 @@
 {*********************************************************}
 {                                                         }
 {                 Zeos Database Objects                   }
-{         Interbase Database Connectivity Classes         }
+{         Sybase SQL Anywhere Connectivity Classes        }
 {                                                         }
 {        Originally written by Sergey Merkuriev           }
 {                                                         }
@@ -79,7 +79,7 @@ type
     ['{FAAAFCE0-F550-4098-96C6-580145813EBF}']
     function GetDBHandle: PZASASQLCA;
     function GetPlainDriver: IZASAPlainDriver;
-//    procedure CreateNewDatabase(SQL: String);
+//    procedure CreateNewDatabase(const SQL: String);
   end;
 
   {** Implements ASA Database Connection. }
@@ -93,11 +93,9 @@ type
   protected
     procedure InternalCreate; override;
   public
-    destructor Destroy; override;
-
     function GetDBHandle: PZASASQLCA;
     function GetPlainDriver: IZASAPlainDriver;
-//    procedure CreateNewDatabase(SQL: String);
+//    procedure CreateNewDatabase(const SQL: String);
 
     function CreateRegularStatement(Info: TStrings): IZStatement; override;
     function CreatePreparedStatement(const SQL: string; Info: TStrings):
@@ -112,6 +110,8 @@ type
 
     procedure Open; override;
     procedure Close; override;
+
+    function GetServerProvider: TZServerProvider; override;
   end;
 
   {** Implements a specialized cached resolver for ASA. }
@@ -129,7 +129,7 @@ implementation
 
 uses
   ZFastCode, ZDbcASAMetadata, ZDbcASAStatement, ZDbcASAUtils, ZSybaseToken,
-  ZSybaseAnalyser, ZDbcLogging, ZSysUtils
+  ZSybaseAnalyser, ZDbcLogging, ZSysUtils, ZDbcProperties
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 { TZASADriver }
@@ -200,9 +200,7 @@ end;
 }
 function TZASADriver.GetTokenizer: IZTokenizer;
 begin
-  if Tokenizer = nil then
-    Tokenizer := TZSybaseTokenizer.Create;
-  Result := Tokenizer;
+  Result := TZSybaseTokenizer.Create; { thread save! Allways return a new Tokenizer! }
 end;
 
 {**
@@ -211,9 +209,7 @@ end;
 }
 function TZASADriver.GetStatementAnalyser: IZStatementAnalyser;
 begin
-  if Analyser = nil then
-    Analyser := TZSybaseStatementAnalyser.Create;
-  Result := Analyser;
+  Result := TZSybaseStatementAnalyser.Create; { thread save! Allways return a new Analyser! }
 end;
 
 { TZASAConnection }
@@ -368,18 +364,7 @@ function TZASAConnection.CreateRegularStatement(
 begin
   if IsClosed then
      Open;
-  Result := TZASAStatement.Create(Self, Info);
-end;
-
-{**
-  Destroys this object and cleanups the memory.
-}
-destructor TZASAConnection.Destroy;
-begin
-  if not Closed then
-    Close;
-
-  inherited;
+  Result := TZASAPreparedStatement.Create(Self, Info);
 end;
 
 {**
@@ -398,6 +383,11 @@ end;
 function TZASAConnection.GetPlainDriver: IZASAPlainDriver;
 begin
   Result := PlainDriver as IZASAPlainDriver;
+end;
+
+function TZASAConnection.GetServerProvider: TZServerProvider;
+begin
+  Result := spSybase;
 end;
 
 {**
@@ -437,10 +427,10 @@ begin
     end;
 
     Links := '';
-    if Info.Values['CommLinks'] <> ''
-      then Links := 'CommLinks=' + Info.Values['CommLinks'];
-    if Info.Values['LINKS'] <> ''
-      then Links := 'LINKS=' + Info.Values['LINKS'];
+    if Info.Values[ConnProps_CommLinks] <> ''
+      then Links := 'CommLinks=' + Info.Values[ConnProps_CommLinks];
+    if Info.Values[ConnProps_Links] <> ''
+      then Links := 'LINKS=' + Info.Values[ConnProps_Links];
     if (Links = '') and (Port <> 0)
       then Links := 'LINKS=tcpip(PORT=' + ZFastCode.IntToStr(Port) + ')';
     if Links <> ''

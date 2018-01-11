@@ -56,6 +56,9 @@ interface
 {$I ZDbc.inc}
 
 uses
+{$IFDEF USE_SYNCOMMONS}
+  SynCommons,
+{$ENDIF USE_SYNCOMMONS}
 {$IFDEF MSWINDOWS}
   Windows,
 {$ENDIF}
@@ -101,6 +104,7 @@ type
     procedure CheckColumnConvertion(ColumnIndex: Integer; ResultType: TZSQLType);
     procedure CheckBlobColumn(ColumnIndex: Integer);
     procedure Open; virtual;
+
     function GetColumnIndex(const ColumnName: string): Integer;
     property RowNo: Integer read FRowNo write FRowNo;
     property LastRowNo: Integer read FLastRowNo write FLastRowNo;
@@ -115,9 +119,8 @@ type
       read FResultSetConcurrency write FResultSetConcurrency;
     property Statement: IZStatement read FStatement;
     property Metadata: TContainedObject read FMetadata write FMetadata;
-
   public
-    constructor Create(Statement: IZStatement; SQL: string;
+    constructor Create(const Statement: IZStatement; const SQL: string;
       Metadata: TContainedObject; ConSettings: PZConSettings);
     destructor Destroy; override;
 
@@ -126,6 +129,7 @@ type
 
     function Next: Boolean; virtual;
     procedure Close; virtual;
+    procedure ResetCursor; virtual;
     function WasNull: Boolean; virtual;
 
     //======================================================================
@@ -354,6 +358,11 @@ type
 
     function GetConSettings: PZConsettings;
     property ColumnsInfo: TObjectList read FColumnsInfo write FColumnsInfo;
+
+    {$IFDEF USE_SYNCOMMONS}
+    procedure ColumnsToJSON(JSONWriter: TJSONWriter; EndJSONObject: Boolean = True;
+      With_DATETIME_MAGIC: Boolean = False; SkipNullFields: Boolean = False); virtual;
+    {$ENDIF}
   end;
 
   {** implents a optimal Converter function for Date, Time, DateTime conversion }
@@ -386,6 +395,8 @@ type
     procedure SetBytes(const Value: TBytes); virtual;
     function GetStream: TStream; virtual;
     procedure SetStream(const Value: TStream); overload; virtual;
+    function GetBufferAddress: PPointer;
+    function GetLengthAddress: PInteger;
     function GetBuffer: Pointer; virtual;
     procedure SetBuffer(const Buffer: Pointer; const Length: Integer);
     {$IFDEF WITH_MM_CAN_REALLOC_EXTERNAL_MEM}
@@ -433,13 +444,14 @@ type
     function GetBytes: TBytes; override;
     function GetStream: TStream; override;
     function GetBuffer: Pointer; override;
+    function Clone(Empty: Boolean = False): IZBlob; override;
+    procedure FlushBuffer; virtual;
   end;
 
   {** Implements external or internal clob wrapper object. }
   TZAbstractCLob = class(TZAbstractBlob)
-  private
-    FCurrentCodePage: Word;
   protected
+    FCurrentCodePage: Word;
     FConSettings: PZConSettings;
     procedure InternalSetRawByteString(Const Value: RawByteString; const CodePage: Word);
     procedure InternalSetAnsiString(Const Value: AnsiString);
@@ -509,11 +521,19 @@ type
     function GetPWideChar: PWideChar; override;
     function GetBuffer: Pointer; override;
     function Clone(Empty: Boolean = False): IZBLob; override;
+    procedure FlushBuffer; virtual;
   End;
+
+{$IFDEF USE_SYNCOMMONS}
+const
+  JSONBool: array[Boolean] of ShortString = ('false', 'true');
+  ValidCenturyMagic = Word(14641); //min '19'      14385
+  ZeroTimeMagic = Int64(3472339291344613424); //00:00:00
+{$ENDIF USE_SYNCOMMONS}
 
 implementation
 
-uses Math, ZMessages, ZDbcUtils, ZDbcResultSetMetadata, ZEncoding, ZFastCode
+uses ZMessages, ZDbcUtils, ZDbcResultSetMetadata, ZEncoding, ZFastCode
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 function CompareNothing(const Null1, Null2: Boolean; const V1, V2): Integer; //emergency exit for complex types we can't sort quickly like arrays, dataset ...
@@ -538,7 +558,7 @@ function CompareInt64_Asc(const Null1, Null2: Boolean; const V1, V2): Integer;
 begin
   if Null1 and Null2 then Result := 0
   else if Null1 then Result := -1
-  else if Null2 then Result := 0
+  else if Null2 then Result := 1
   else Result := Ord(TZVariant(V1).VInteger > TZVariant(V2).VInteger)-Ord(TZVariant(V1).VInteger < TZVariant(V2).VInteger);
 end;
 
@@ -640,7 +660,7 @@ end;
   @param Metadata a resultset metadata object.
   @param ConSettings the pointer to Connection Settings record
 }
-constructor TZAbstractResultSet.Create(Statement: IZStatement; SQL: string;
+constructor TZAbstractResultSet.Create(const Statement: IZStatement; const SQL: string;
   Metadata: TContainedObject; ConSettings: PZConSettings);
 var
   DatabaseMetadata: IZDatabaseMetadata;
@@ -825,6 +845,24 @@ begin
 end;
 
 {**
+  Resets cursor position of this recordset and
+  the overrides should reset the prepared handles.
+}
+procedure TZAbstractResultSet.ResetCursor;
+begin
+  if not FClosed and Assigned(Statement){virtual RS ! } then
+  begin
+    FFetchSize := Statement.GetFetchSize;
+    FPostUpdates := Statement.GetPostUpdates;
+    FLocateUpdates := Statement.GetLocateUpdates;
+    FMaxRows := Statement.GetMaxRows;
+  end;
+  FRowNo := 0;
+  FLastRowNo := 0;
+  LastWasNull := True;
+end;
+
+{**
   Releases this <code>ResultSet</code> object's database and
   JDBC resources immediately instead of waiting for
   this to happen when it is automatically closed.
@@ -838,19 +876,9 @@ end;
   is also automatically closed when it is garbage collected.
 }
 procedure TZAbstractResultSet.Close;
-var
-   I: integer;
-   FColumnInfo: TZColumnInfo;
 begin
-  LastWasNull := True;
-  FRowNo := 0;
-  FLastRowNo := 0;
   FClosed := True;
-  for I := FColumnsInfo.Count - 1 downto 0 do
-  begin
-    FColumnInfo := TZColumnInfo(FColumnsInfo.Extract(FColumnsInfo.Items[I]));
-    FColumnInfo.Free;
-  end;
+  ResetCursor;
   FColumnsInfo.Clear;
   if (FStatement <> nil) then FStatement.FreeOpenResultSetReference;
   FStatement := nil;
@@ -1579,7 +1607,7 @@ begin
       Result := EncodeBytes(GetBytes(ColumnIndex));
     stString, stAsciiStream, stUnicodeString, stUnicodeStream:
       if (not ConSettings^.ClientCodePage^.IsStringFieldCPConsistent) or
-          (ConSettings^.ClientCodePage^.CP = zCP_UTF8) then
+         (ConSettings^.ClientCodePage^.Encoding in [ceUTf8, ceUTF16]) then
         Result := EncodeUnicodeString(GetUnicodeString(ColumnIndex))
       else
         Result := EncodeRawByteString(GetRawByteString(ColumnIndex));
@@ -2217,7 +2245,7 @@ function TZAbstractResultSet.GetColumnIndex(const ColumnName: string): Integer;
 begin
   Result := FindColumn(ColumnName);
 
-  if Result < {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF} then
+  if Result = InvalidDbcIndex then
     raise EZSQLException.Create(Format(SColumnWasNotFound, [ColumnName]));
 end;
 
@@ -2229,29 +2257,9 @@ end;
   @return the column index of the given column name
 }
 function TZAbstractResultSet.FindColumn(const ColumnName: string): Integer;
-var
-  I: Integer;
-  Metadata: TZAbstractResultSetMetadata;
 begin
   CheckClosed;
-  Metadata := TZAbstractResultSetMetadata(FMetadata);
-  Result := InvalidDbcIndex;
-
-  { Search for case sensitive columns. }
-  for I := FirstDbcIndex to Metadata.GetColumnCount{$IFDEF GENERIC_INDEX}-1{$ENDIF} do
-    if Metadata.GetColumnLabel(I) = ColumnName then
-    begin
-      Result := I;
-      Exit;
-    end;
-
-  { Search for case insensitive columns. }
-  for I := FirstDbcIndex to Metadata.GetColumnCount{$IFDEF GENERIC_INDEX}-1{$ENDIF} do
-    if AnsiUpperCase(Metadata.GetColumnLabel(I)) = AnsiUpperCase(ColumnName) then
-    begin
-      Result := I;
-      Exit;
-    end;
+  Result := TZAbstractResultSetMetadata(FMetadata).FindColumn(ColumnName);
 end;
 
 //---------------------------------------------------------------------
@@ -3821,6 +3829,15 @@ procedure TZAbstractResultSet.MoveToCurrentRow;
 begin
 end;
 
+{$IFDEF USE_SYNCOMMONS}
+procedure TZAbstractResultSet.ColumnsToJSON(JSONWriter: TJSONWriter;
+  EndJSONObject: Boolean = True; With_DATETIME_MAGIC: Boolean = False;
+  SkipNullFields: Boolean = False);
+begin
+  raise Exception.Create(SUnsupportedOperation);
+end;
+{$ENDIF}
+
 {**
   Compares fields from two row buffers.
   @param Row1 the first row buffer to compare.
@@ -3878,7 +3895,7 @@ begin
             Result[i] := CompareBytes_Asc;
           stString, stAsciiStream, stUnicodeString, stUnicodeStream:
             if (not ConSettings^.ClientCodePage^.IsStringFieldCPConsistent) or
-                (ConSettings^.ClientCodePage^.CP = zCP_UTF8) then
+                (ConSettings^.ClientCodePage^.Encoding in [ceUTf8, ceUTF16]) then
               Result[i] := CompareUnicodeString_Asc
             else
               Result[I] := CompareRawByteString_Asc
@@ -3901,7 +3918,7 @@ begin
             Result[i] := CompareBytes_Desc;
           stString, stAsciiStream, stUnicodeString, stUnicodeStream:
             if (not ConSettings^.ClientCodePage^.IsStringFieldCPConsistent) or
-                (ConSettings^.ClientCodePage^.CP = zCP_UTF8) then
+                (ConSettings^.ClientCodePage^.Encoding in [ceUTf8, ceUTF16]) then
               Result[i] := CompareUnicodeString_Desc
             else
               Result[I] := CompareRawByteString_Desc
@@ -3972,7 +3989,7 @@ begin
   if FBlobSize > 0 then
   begin
     GetMem(FBlobData, FBlobSize);
-    System.Move(Data^, FBlobData^, FBlobSize);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Data^, FBlobData^, FBlobSize);
   end;
   FUpdated := False;
 end;
@@ -4157,7 +4174,7 @@ end;
 function TZAbstractBlob.GetString: RawByteString;
 begin
   SetLength(Result, FBlobSize);
-  System.Move(FBlobData^, Result[1], FBlobSize);
+  {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, Result[1], FBlobSize);
 end;
 
 {**
@@ -4172,7 +4189,7 @@ begin
     FBlobSize := System.Length(Value)+1;
     GetMem(FBlobData, FBlobSize);
     if FBlobSize > 1 then
-      System.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
     (PAnsiChar(FBlobData)+FBlobSize-1)^ := #0;
   end
   else
@@ -4181,7 +4198,7 @@ begin
     if FBlobSize > 0 then
     begin
       GetMem(FBlobData, FBlobSize);
-      System.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
     end;
   end;
   FUpdated := True;
@@ -4197,12 +4214,17 @@ begin
   begin
     if (FBlobSize > 0) and Assigned(FBlobData) then begin
       SetLength(Result, FBlobSize);
-      Move(FBlobData^, Result[0], FBlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, Result[0], FBlobSize);
     end else
       Result := nil;
   end
   else
     Result := nil;
+end;
+
+function TZAbstractBlob.GetLengthAddress: PInteger;
+begin
+  Result := @FBlobSize;
 end;
 
 {**
@@ -4218,7 +4240,7 @@ begin
     if FBlobSize > 0 then
     begin
       GetMem(FBlobData, FBlobSize);
-      System.Move(Value[0], FBlobData^, FBlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Value[0], FBlobData^, FBlobSize);
     end;
   end;
   FUpdated := True;
@@ -4234,7 +4256,7 @@ begin
   if (FBlobSize > 0) and Assigned(FBlobData) then
   begin
     Result.Size := FBlobSize;
-    System.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize);
   end;
   Result.Position := 0;
 end;
@@ -4269,6 +4291,11 @@ begin
   Result := FBlobData;
 end;
 
+function TZAbstractBlob.GetBufferAddress: PPointer;
+begin
+  Result := @FBlobData;
+end;
+
 procedure TZAbstractBlob.SetBuffer(const Buffer: Pointer; const Length: Integer);
 begin
   InternalClear;
@@ -4276,7 +4303,7 @@ begin
   if Assigned(Buffer) and ( Length > 0 ) then
   begin
     GetMem(FBlobData, Length);
-    Move(Buffer^, FBlobData^, Length);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buffer^, FBlobData^, Length);
   end;
   FUpdated := True;
 end;
@@ -4340,6 +4367,27 @@ begin
   Result := inherited Getbuffer;
 end;
 
+function TZAbstractUnCachedBlob.Clone(Empty: Boolean = False): IZBlob;
+begin
+  if not Empty and not Floaded then
+  begin
+    ReadLob;
+    Result := inherited Clone(Empty);
+    FlushBuffer;
+  end
+  else
+    Result := inherited Clone(Empty);
+end;
+
+procedure TZAbstractUnCachedBlob.FlushBuffer;
+begin
+  if not FUpdated then
+  begin
+    InternalClear;
+    Floaded := False;
+  end;
+end;
+
 { TZAbstractCLob }
 
 procedure TZAbstractCLob.InternalSetRawByteString(Const Value: RawByteString;
@@ -4348,15 +4396,15 @@ begin
   FBlobSize := System.Length(Value)+1;
   FCurrentCodePage := CodePage;
   ReallocMem(FBlobData, FBlobSize);
-  System.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
+  {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
 end;
 
 procedure TZAbstractCLob.InternalSetAnsiString(Const Value: AnsiString);
 begin
   FBlobSize := System.Length(Value)+1;
-  FCurrentCodePage := ZDefaultSystemCodePage;
+  FCurrentCodePage := ZOSCodePage;
   ReallocMem(FBlobData, FBlobSize);
-  System.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
+  {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
 end;
 
 procedure TZAbstractCLob.InternalSetUTF8String(Const Value: UTF8String);
@@ -4364,7 +4412,7 @@ begin
   FBlobSize := System.Length(Value)+1;
   FCurrentCodePage := zCP_UTF8;
   ReallocMem(FBlobData, FBlobSize);
-  System.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
+  {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsiChar(Value)^, FBlobData^, FBlobSize);
 end;
 
 procedure TZAbstractCLob.InternalSetUnicodeString(const Value: ZWideString);
@@ -4372,7 +4420,7 @@ begin
   FBlobSize := (System.Length(Value)+1) shl 1;
   FCurrentCodePage := zCP_UTF16;
   ReallocMem(FBlobData, FBlobSize);
-  System.Move(PWideChar(Value)^, FBlobData^, FBlobSize);
+  {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PWideChar(Value)^, FBlobData^, FBlobSize);
 end;
 
 procedure TZAbstractCLob.InternalSetPAnsiChar(const Buffer: PAnsiChar; CodePage: Word; const Len: Cardinal);
@@ -4397,7 +4445,7 @@ begin
           else
             if zCompatibleCodePages(FConSettings^.ClientCodePage^.CP, zCP_UTF8) then
               if ZCompatibleCodePages(FConSettings^.CTRL_CP, zCP_UTF8) then
-                CodePage := zDefaultSystemCodePage
+                CodePage := ZOSCodePage
               else
                 CodePage := FConSettings^.CTRL_CP
             else
@@ -4412,7 +4460,7 @@ SetData:
       FBlobSize := Len +1;
       FCurrentCodePage := CodePage;
       GetMem(FBlobData, FBlobSize);
-      System.Move(Buffer^, FBlobData^, FBlobSize-1);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buffer^, FBlobData^, FBlobSize-1);
       (PAnsiChar(FBlobData)+Len)^ := #0; //set leading terminator
     end;
   end;
@@ -4427,7 +4475,7 @@ begin
     FBlobSize := (Len +1) shl 1; //shl 1 = * 2 but faster
     FCurrentCodePage := zCP_UTF16;
     ReallocMem(FBlobData, FBlobSize);
-    System.Move(Buffer^, FBlobData^, FBlobSize-2);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buffer^, FBlobData^, FBlobSize-2);
     (PWideChar(FBlobData)+Len)^ := WideChar(#0); //set leading terminator
   end;
 end;
@@ -4475,7 +4523,7 @@ begin
   begin
     FBlobSize := (Len+1) shl 1; //shl 1 = * 2 but faster, include #0#0 terminator
     GetMem(FBlobData, FBlobSize);
-    System.Move(Data^, FBlobData^, FBlobSize);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Data^, FBlobData^, FBlobSize);
     (PWideChar(FBlobData)+Len)^ := WideChar(#0);
   end
   else
@@ -4539,7 +4587,7 @@ var
 begin
   Result := '';
   if FBlobSize > 0 then
-    if ZCompatibleCodePages(FCurrentCodePage, ZDefaultSystemCodePage) then
+    if ZCompatibleCodePages(FCurrentCodePage, ZOSCodePage) then
        System.SetString(Result, PAnsiChar(FBlobData), FBlobSize -1)
     else
     begin
@@ -4606,7 +4654,7 @@ begin
        (FCurrentCodePage = zCP_UTF16BE) then
     begin
       SetLength(Result, (FBlobSize shr 1) -1);
-      System.Move(FBlobData^, PWideChar(Result)^, FBlobSize - 2);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, PWideChar(Result)^, FBlobSize - 2);
     end
     else
     begin
@@ -4635,7 +4683,7 @@ begin
     else
       GetPAnsiChar(FConSettings^.ClientCodePage^.CP);
     Result.Size := Length;
-    System.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
   end;
 end;
 
@@ -4667,13 +4715,13 @@ begin
     if ZCompatibleCodePages(FCurrentCodePage, FConSettings^.ClientCodePage^.CP) then
     begin
       Result.Size := FBlobSize-1;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-1)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-1)
     end
     else
     begin
       Tmp := GetRawByteString;
       Result.Size := Length;
-      System.Move(Tmp[1], TMemoryStream(Result).Memory^, Length)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Tmp[1], TMemoryStream(Result).Memory^, Length)
     end;
   end;
   Result.Position := 0;
@@ -4684,16 +4732,16 @@ begin
   Result := TMemoryStream.Create;
   if (FBlobSize > 0) and Assigned(FBlobData) then
   begin
-    if ZCompatibleCodePages(FCurrentCodePage, ZDefaultSystemCodePage) then
+    if ZCompatibleCodePages(FCurrentCodePage, ZOSCodePage) then
     begin
       Result.Size := Length;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
     end
     else
     begin
       GetAnsiString; //does the required conversion
       Result.Size := Length;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, Length)
     end;
   end;
   Result.Position := 0;
@@ -4707,13 +4755,13 @@ begin
     if ZCompatibleCodePages(FCurrentCodePage, zCP_UTF8) then
     begin
       Result.Size := FBlobSize -1;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize -1)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize -1)
     end
     else
     begin
       GetUTF8String;
       Result.Size := Length;
-      System.Move(FBlobData, TMemoryStream(Result).Memory^, FBlobSize -1)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData, TMemoryStream(Result).Memory^, FBlobSize -1)
     end;
   end;
   Result.Position := 0;
@@ -4728,13 +4776,13 @@ begin
        (FCurrentCodePage = zCP_UTF16) then
     begin
       Result.Size := FBlobSize -2;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-2)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-2)
     end
     else
     begin
       GetUnicodeString;
       Result.Size := FBlobSize-2;
-      System.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-2)
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FBlobData^, TMemoryStream(Result).Memory^, FBlobSize-2)
     end;
   end;
   Result.Position := 0;
@@ -4782,7 +4830,8 @@ begin
       Result := PWideChar(FBlobData)
     else
     begin
-      GetUnicodeString;
+      FBlobSize := (PRaw2PUnicodeBuf(FBlobData, Length, 0, FBlobData, FCurrentCodePage)+1) shl 1 ;
+      FCurrentCodePage := zCP_UTF16;
       Result := PWideChar(FBlobData);
     end;
 end;
@@ -4814,12 +4863,12 @@ function TZAbstractCLob.Clone(Empty: Boolean = False): IZBLob;
 begin
   if (FCurrentCodePage = zCP_UTF16) or
      (FCurrentCodePage = zCP_UTF16BE) then
-    if Empty then
+    if Empty or not Assigned(FBlobData) or (FBlobSize <= 1) then
       Result := TZAbstractCLob.CreateWithData(nil, 0, FConSettings)
     else
       Result := TZAbstractCLob.CreateWithData(FBlobData, (FBlobSize shr 1)-1, FConSettings)
   else
-    if Empty then
+    if Empty or not Assigned(FBlobData) or (FBlobSize <= 0) then
       Result := TZAbstractCLob.CreateWithData(nil, 0, FCurrentCodePage, FConSettings)
     else
       Result := TZAbstractCLob.CreateWithData(FBlobData, FBlobSize-1, FCurrentCodePage, FConSettings);
@@ -4943,8 +4992,23 @@ end;
 }
 function TZAbstractUnCachedCLob.Clone(Empty: Boolean = False): IZBLob;
 begin
-  if not Empty and not Loaded then ReadLob;
-  Result := inherited Clone(Empty);
+  if not Empty and not Loaded then
+  begin
+    ReadLob;
+    Result := inherited Clone(Empty);
+    FlushBuffer;
+  end
+  else
+    Result := inherited Clone(Empty);
+end;
+
+procedure TZAbstractUnCachedCLob.FlushBuffer;
+begin
+  if not FUpdated then
+  begin
+    InternalClear;
+    FLoaded := False;
+  end;
 end;
 
 end.

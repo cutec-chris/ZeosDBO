@@ -92,7 +92,7 @@ type
     function GetURL: string;
     procedure SetURL(const Value: string);
     procedure DoOnPropertiesChange(Sender: TObject);
-    function GetParamAndValue(AString: String; Var Param, Value: String): Boolean;
+    function GetParamAndValue(const AString: String; Var Param, Value: String): Boolean;
     procedure AddValues(Values: TStrings);
   public
     constructor Create; overload;
@@ -119,7 +119,7 @@ type
 
 implementation
 
-uses ZCompatibility, StrUtils, ZFastCode;
+uses ZCompatibility, ZFastCode, ZConnProperties;
 
 {TZURLStringList}
 function TZURLStringList.GetTextStr: string;
@@ -256,12 +256,10 @@ function TZURL.GetURL: string;
 var
   hasParamPart : boolean;
   procedure AddParamPart(const ParamPart: String);
+  const
+    ParamSep: array[Boolean] of Char = ('?', ';');
   begin
-    if hasParamPart then
-      Result := Result + ';'
-    else
-      Result := Result + '?';
-    Result := Result + ParamPart;
+    Result := Result + ParamSep[hasParamPart] + ParamPart;
     hasParamPart := True;
   end;
 
@@ -302,8 +300,8 @@ begin
     AddParamPart(Properties.GetURLText); //Adds the escaped string
 
   // LibLocation
-    if FLibLocation <> '' then
-      AddParamPart('LibLocation='+ FLibLocation);
+  if FLibLocation <> '' then
+    AddParamPart('LibLocation='+ FLibLocation);
 end;
 
 procedure TZURL.SetURL(const Value: string);
@@ -331,6 +329,15 @@ begin
   try
     AValue := Value;
 
+    // Strip out the parameters
+    I := ZFastCode.Pos('?', AValue);
+    if I > 0 then
+    begin
+      AValue := Copy(AValue, I + 1, MaxInt);
+      AProperties.Text := StringReplace(AValue, ';', LineEnding, [rfReplaceAll]);
+      AValue := Copy(Value, 1, I - 1);
+    end;
+
     // APrefix
     I := ZFastCode.Pos(':', AValue);
     if I = 0 then
@@ -349,47 +356,35 @@ begin
     if ZFastCode.Pos('//', AValue) = 1 then
     begin
       Delete(AValue, 1, 2);
-      if (ZFastCode.Pos(':', AValue) > 0) and
-         ((ZFastCode.Pos(':', AValue) < ZFastCode.Pos('/', AValue)) or
-         (ZFastCode.Pos('/', AValue)=0)) then
-        AHostName := Copy(AValue, 1, ZFastCode.Pos(':', AValue) - 1)
-      else if ZFastCode.Pos('/', AValue) > 0 then
-        AHostName := Copy(AValue, 1, ZFastCode.Pos('/', AValue) - 1)
-      else if ZFastCode.Pos('?', AValue) > 0 then
-        AHostName := Copy(AValue, 1, ZFastCode.Pos('?', AValue) - 1)
-      else
-        AHostName := AValue;
 
-      Delete(AValue, 1, Length(AHostName));
+      // Strip "hostname[:port]" out of "/database"
+      I := ZFastCode.Pos('/', AValue);
+      if I > 0 then
+      begin
+        AHostName := Copy(AValue, 1, I - 1);
+        Delete(AValue, 1, I);    
+      end
+      else
+      begin
+        AHostName := AValue;
+        AValue := '';
+      end;
 
       // APort
-      if ZFastCode.Pos(':', AValue) = 1 then
+      I := ZFastCode.Pos(':', AHostName);
+      if I > 0 then
       begin
-        Delete(AValue, 1, 1);
-        if ZFastCode.Pos('/', AValue) > 0 then
-          APort := Copy(AValue, 1, ZFastCode.Pos('/', AValue) - 1)
-        else if ZFastCode.Pos('?', AValue) > 0 then
-          APort := Copy(AValue, 1, ZFastCode.Pos('?', AValue) - 1)
-        else
-          APort := AValue;
-
-        Delete(AValue, 1, Length(APort));
+        APort := Copy(AHostName, I + 1, MaxInt);
+        Delete(AHostName, I, MaxInt);  
       end;
-    end;
-
+    end
+    else
+    // Likely a database delimited by / so remove the /
     if ZFastCode.Pos('/', AValue) = 1 then
       Delete(AValue, 1, 1);
 
     // ADatabase
-    I := ZFastCode.Pos('?', AValue);
-    if I > 0 then
-    begin
-      ADatabase := Copy(AValue, 1, I - 1);
-      Delete(AValue, 1, I);
-      AProperties.Text := StringReplace(AValue, ';', LineEnding, [rfReplaceAll]);
-    end
-    else
-      ADatabase := AValue;
+    ADatabase := AValue;
 
     FPrefix := APrefix;
     FProtocol := AProtocol;
@@ -405,37 +400,44 @@ begin
 end;
 
 procedure TZURL.DoOnPropertiesChange(Sender: TObject);
+var
+  S: string;
 begin
   FProperties.OnChange := nil;
   try
-    if FProperties.Values['UID'] <> '' then
+    S := FProperties.Values[ConnProps_UID];
+    if S <> '' then
     begin
-      UserName := FProperties.Values['UID'];
-      FProperties.Delete(FProperties.IndexOfName('UID'));
+      UserName := S;
+      FProperties.Values[ConnProps_UID] := '';
     end;
 
-    if FProperties.Values['PWD'] <> '' then
+    S := FProperties.Values[ConnProps_Username];
+    if S <> '' then
     begin
-      Password := FProperties.Values['PWD'];
-      FProperties.Delete(FProperties.IndexOfName('PWD'));
+      UserName := S;
+      FProperties.Values[ConnProps_Username] := '';
     end;
 
-    if FProperties.Values['username'] <> '' then
+    S := FProperties.Values[ConnProps_PWD];
+    if S <> '' then
     begin
-      UserName := FProperties.Values['username'];
-      FProperties.Delete(FProperties.IndexOfName('username'));
+      Password := S;
+      FProperties.Values[ConnProps_PWD] := '';
     end;
 
-    if FProperties.Values['password'] <> '' then
+    S := FProperties.Values[ConnProps_Password];
+    if S <> '' then
     begin
-      Password := FProperties.Values['password'];
-      FProperties.Delete(FProperties.IndexOfName('password'));
+      Password := S;
+      FProperties.Values[ConnProps_Password] := '';
     end;
 
-    if FProperties.Values['LibLocation'] <> '' then
+    S := FProperties.Values[ConnProps_LibLocation];
+    if S <> '' then
     begin
-      LibLocation := FProperties.Values['LibLocation'];
-      FProperties.Delete(FProperties.IndexOfName('LibLocation'));
+      LibLocation := S;
+      FProperties.Values[ConnProps_LibLocation] := '';
     end;
 
   finally
@@ -446,11 +448,11 @@ begin
     FOnPropertiesChange(Sender);
 end;
 
-function TZURL.GetParamAndValue(AString: String; Var Param, Value: String): Boolean;
+function TZURL.GetParamAndValue(const AString: String; Var Param, Value: String): Boolean;
 var
   DelimPos: Integer;
 begin
-  DelimPos := PosEx('=', AString);
+  DelimPos := ZFastCode.Pos('=', AString);
   Result := DelimPos <> 0;
   Param := '';
   Value := '';
@@ -471,7 +473,8 @@ begin
     if GetParamAndValue(Values[i], Param{%H-}, Value{%H-}) then
       FProperties.Values[Param] := Value
     else
-      FProperties.Add(Values[i]);
+      if FProperties.IndexOf(Values[i]) = -1 then //add unique params only!
+        FProperties.Add(Values[i]);
 end;
 
 end.

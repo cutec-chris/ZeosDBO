@@ -89,8 +89,8 @@ function ConvertFieldsToColumnInfo(Fields: TFields): TObjectList;
   @param Fields a collection of field definitions.
   @param RowAccessor a destination row accessor.
 }
-procedure FetchFromResultSet(ResultSet: IZResultSet;
-  const FieldsLookupTable: TIntegerDynArray; Fields: TFields;
+procedure FetchFromResultSet(const ResultSet: IZResultSet;
+  const FieldsLookupTable: TPointerDynArray; Fields: TFields;
   RowAccessor: TZRowAccessor);
 
 {**
@@ -100,8 +100,8 @@ procedure FetchFromResultSet(ResultSet: IZResultSet;
   @param Fields a collection of field definitions.
   @param RowAccessor a destination row accessor.
 }
-procedure PostToResultSet(ResultSet: IZResultSet;
-  const FieldsLookupTable: TIntegerDynArray; Fields: TFields;
+procedure PostToResultSet(const ResultSet: IZResultSet;
+  const FieldsLookupTable: TPointerDynArray; Fields: TFields;
   RowAccessor: TZRowAccessor);
 
 {**
@@ -120,7 +120,7 @@ function DefineFields(DataSet: TDataset; const FieldNames: string;
   @returns an array with field object references.
 }
 function DefineFilterFields(DataSet: TDataset;
-  Expression: IZExpression): TObjectDynArray;
+  const Expression: IZExpression): TObjectDynArray;
 
 {**
   Retrieves a set of specified field values.
@@ -130,7 +130,7 @@ function DefineFilterFields(DataSet: TDataset;
   @return an array with field values.
 }
 procedure RetrieveDataFieldsFromResultSet(const FieldRefs: TObjectDynArray;
-  ResultSet: IZResultSet; var ResultValues: TZVariantDynArray);
+  const ResultSet: IZResultSet; const ResultValues: TZVariantDynArray);
 
 {**
   Retrieves a set of specified field values.
@@ -142,7 +142,7 @@ procedure RetrieveDataFieldsFromResultSet(const FieldRefs: TObjectDynArray;
 }
 procedure RetrieveDataFieldsFromRowAccessor(const FieldRefs: TObjectDynArray;
   const FieldIndices: TIntegerDynArray; RowAccessor: TZRowAccessor;
-  var ResultValues: TZVariantDynArray);
+  const ResultValues: TZVariantDynArray);
 
 {**
   Copy a set of specified field values to variables.
@@ -151,7 +151,7 @@ procedure RetrieveDataFieldsFromRowAccessor(const FieldRefs: TObjectDynArray;
   @param Variables a list of variables.
 }
 procedure CopyDataFieldsToVars(const Fields: TObjectDynArray;
-  ResultSet: IZResultSet; Variables: IZVariablesList);
+  const ResultSet: IZResultSet; const Variables: IZVariablesList);
 
 {**
   Prepares values for comparison by CompareFieldsFromResultSet.
@@ -162,7 +162,7 @@ procedure CopyDataFieldsToVars(const Fields: TObjectDynArray;
   @param CaseInsensitive <code>True</code> if keys are case insensitive.
 }
 procedure PrepareValuesForComparison(const FieldRefs: TObjectDynArray;
-  var DecodedKeyValues: TZVariantDynArray; ResultSet: IZResultSet;
+  const DecodedKeyValues: TZVariantDynArray; const ResultSet: IZResultSet;
   PartialKey: Boolean; CaseInsensitive: Boolean);
 
 {**
@@ -186,7 +186,7 @@ function CompareDataFields(const KeyValues, RowValues: TZVariantDynArray;
   @return <code> if values are equal.
 }
 function CompareFieldsFromResultSet(const FieldRefs: TObjectDynArray;
-  const KeyValues: TZVariantDynArray; ResultSet: IZResultSet; PartialKey: Boolean;
+  const KeyValues: TZVariantDynArray; const ResultSet: IZResultSet; PartialKey: Boolean;
   CaseInsensitive: Boolean): Boolean;
 
 {**
@@ -218,7 +218,7 @@ function NativeToDateTime(DataType: TFieldType; Buffer: Pointer): TDateTime;
   @param ResultSet the resultset to read the first field value.
   @param Field2 the second field object.
 }
-function CompareKeyFields(Field1: TField; ResultSet: IZResultSet;
+function CompareKeyFields(Field1: TField; const ResultSet: IZResultSet;
   Field2: TField): Boolean;
 
 {**
@@ -240,7 +240,7 @@ procedure DefineSortedFields(DataSet: TDataset;
   @param Fields a collection of TDataset fields in initial order.
   @returns a fields lookup table.
 }
-function CreateFieldsLookupTable(Fields: TFields): TIntegerDynArray;
+function CreateFieldsLookupTable(Fields: TFields): TPointerDynArray;
 
 {**
   Defines an original field index in the dataset.
@@ -248,7 +248,7 @@ function CreateFieldsLookupTable(Fields: TFields): TIntegerDynArray;
   @param Field a TDataset field object.
   @returns an original fields index or -1 otherwise.
 }
-function DefineFieldIndex(const FieldsLookupTable: TIntegerDynArray;
+function DefineFieldIndex(const FieldsLookupTable: TPointerDynArray;
   Field: TField): Integer;
 
 {**
@@ -257,21 +257,21 @@ function DefineFieldIndex(const FieldsLookupTable: TIntegerDynArray;
   @param FieldRefs a TDataset field object references.
   @returns an array with original fields indices.
 }
-function DefineFieldIndices(const FieldsLookupTable: TIntegerDynArray;
+function DefineFieldIndices(const FieldsLookupTable: TPointerDynArray;
   const FieldRefs: TObjectDynArray): TIntegerDynArray;
 
 {**
   Splits up a qualified object name into pieces. Catalog, schema
   and objectname.
 }
-procedure SplitQualifiedObjectName(QualifiedName: string;
+procedure SplitQualifiedObjectName(const QualifiedName: string;
   var Catalog, Schema, ObjectName: string); overload;
 
 {**
   Splits up a qualified object name into pieces. Catalog, schema
   and objectname.
 }
-procedure SplitQualifiedObjectName(QualifiedName: string;
+procedure SplitQualifiedObjectName(const QualifiedName: string;
   const SupportsCatalogs, SupportsSchemas: Boolean;
   var Catalog, Schema, ObjectName: string); overload;
 
@@ -282,7 +282,7 @@ procedure SplitQualifiedObjectName(QualifiedName: string;
   @param Param the TParam where the value is assigned from
 }
 procedure SetStatementParam(Index: Integer;
-  Statement: IZPreparedStatement; Param: TParam);
+  const Statement: IZPreparedStatement; Param: TParam);
 
 {** Common variables. }
 var
@@ -474,8 +474,8 @@ end;
   @param Fields a collection of field definitions.
   @param RowAccessor a destination row accessor.
 }
-procedure FetchFromResultSet(ResultSet: IZResultSet;
-  const FieldsLookupTable: TIntegerDynArray; Fields: TFields;
+procedure FetchFromResultSet(const ResultSet: IZResultSet;
+  const FieldsLookupTable: TPointerDynArray; Fields: TFields;
   RowAccessor: TZRowAccessor);
 var
   I, FieldIndex: Integer;
@@ -533,7 +533,7 @@ begin
       ftCurrency:
         RowAccessor.SetCurrency(FieldIndex, ResultSet.GetCurrency(ColumnIndex));
       ftString, ftWideString:
-        if ResultSet.GetConSettings^.ClientCodePage^.IsStringFieldCPConsistent then
+        if RowAccessor is TZRawRowAccessor then
           RowAccessor.SetPAnsiChar(FieldIndex, ResultSet.GetPAnsiChar(ColumnIndex, Len), @Len)
         else
           RowAccessor.SetPWideChar(FieldIndex, ResultSet.GetPWideChar(ColumnIndex, Len), @Len);
@@ -565,8 +565,8 @@ end;
   @param Fields a collection of field definitions.
   @param RowAccessor a destination row accessor.
 }
-procedure PostToResultSet(ResultSet: IZResultSet;
-  const FieldsLookupTable: TIntegerDynArray; Fields: TFields;
+procedure PostToResultSet(const ResultSet: IZResultSet;
+  const FieldsLookupTable: TPointerDynArray; Fields: TFields;
   RowAccessor: TZRowAccessor);
 var
   I, FieldIndex: Integer;
@@ -630,7 +630,7 @@ begin
         ResultSet.UpdateCurrency(ColumnIndex,
           RowAccessor.GetCurrency(FieldIndex, WasNull));
       ftString, ftWidestring:
-        if ResultSet.GetConSettings^.ClientCodePage^.IsStringFieldCPConsistent then
+        if RowAccessor is TZRawRowAccessor then
           ResultSet.UpdatePAnsiChar(ColumnIndex,
             RowAccessor.GetPAnsiChar(FieldIndex, WasNull, Len), @Len)
         else
@@ -737,7 +737,7 @@ end;
   @returns an array with field object references.
 }
 function DefineFilterFields(DataSet: TDataset;
-  Expression: IZExpression): TObjectDynArray;
+  const Expression: IZExpression): TObjectDynArray;
 var
   I: Integer;
   Current: TField;
@@ -766,7 +766,7 @@ end;
   @return an array with field values.
 }
 procedure RetrieveDataFieldsFromResultSet(const FieldRefs: TObjectDynArray;
-  ResultSet: IZResultSet; var ResultValues: TZVariantDynArray);
+  const ResultSet: IZResultSet; const ResultValues: TZVariantDynArray);
 var
   I, ColumnIndex: Integer;
 begin
@@ -817,7 +817,7 @@ end;
 }
 procedure RetrieveDataFieldsFromRowAccessor(const FieldRefs: TObjectDynArray;
   const FieldIndices: TIntegerDynArray; RowAccessor: TZRowAccessor;
-  var ResultValues: TZVariantDynArray);
+  const ResultValues: TZVariantDynArray);
 var
   I: Integer;
   ColumnIndex: Integer;
@@ -865,7 +865,7 @@ end;
   {$HINTS OFF} //Temp seems not to be init...
 {$ENDIF}
 procedure CopyDataFieldsToVars(const Fields: TObjectDynArray;
-  ResultSet: IZResultSet; Variables: IZVariablesList);
+  const ResultSet: IZResultSet; const Variables: IZVariablesList);
 var
   I, ColumnIndex: Integer;
 begin
@@ -1028,7 +1028,7 @@ end;
   @param CaseInsensitive <code>True</code> if keys are case insensitive.
 }
 procedure PrepareValuesForComparison(const FieldRefs: TObjectDynArray;
-  var DecodedKeyValues: TZVariantDynArray; ResultSet: IZResultSet;
+  const DecodedKeyValues: TZVariantDynArray; const ResultSet: IZResultSet;
   PartialKey: Boolean; CaseInsensitive: Boolean);
 var
   I: Integer;
@@ -1152,7 +1152,7 @@ end;
   @return <code> if values are equal.
 }
 function CompareFieldsFromResultSet(const FieldRefs: TObjectDynArray;
-  const KeyValues: TZVariantDynArray; ResultSet: IZResultSet; PartialKey: Boolean;
+  const KeyValues: TZVariantDynArray; const ResultSet: IZResultSet; PartialKey: Boolean;
   CaseInsensitive: Boolean): Boolean;
 var
   I: Integer;
@@ -1365,7 +1365,7 @@ end;
   @param ResultSet the resultset to read the first field value.
   @param Field2 the second field object.
 }
-function CompareKeyFields(Field1: TField; ResultSet: IZResultSet;
+function CompareKeyFields(Field1: TField; const ResultSet: IZResultSet;
   Field2: TField): Boolean;
 var
   ColumnIndex: Integer;
@@ -1474,18 +1474,11 @@ begin
           CompareKinds[FieldCount - 1] := ckAscending;
       end
       else if TokenType in [ttWord, ttQuoted] then
-      begin
         Field := DataSet.FieldByName(TokenValue)
-      end
-      else if (TokenType = ttNumber)
-        and (StrToIntDef(TokenValue, 0) < Dataset.Fields.Count) then
-      begin
-        Field := Dataset.Fields[StrToIntDef(TokenValue, 0)];
-      end
+      else if (TokenType = ttNumber) and (StrToIntDef(TokenValue, 0) < Dataset.Fields.Count) then
+        Field := Dataset.Fields[StrToIntDef(TokenValue, 0)]
       else if (TokenValue <> ',') and (TokenValue <> ';') then
-      begin
         raise EZDatabaseError.Create(Format(SIncorrectSymbol, [TokenValue]));
-      end;
 
       if Field <> nil then
       begin
@@ -1510,14 +1503,14 @@ end;
 }
 type
   THackZField = Class(TZField); //access protected property
-function CreateFieldsLookupTable(Fields: TFields): TIntegerDynArray;
+function CreateFieldsLookupTable(Fields: TFields): TPointerDynArray;
 var
   I: Integer;
 begin
   SetLength(Result, Fields.Count);
   for I := 0 to Fields.Count - 1 do
   begin
-    Result[I] := Integer(Fields[I]);
+    Result[I] := Fields[I];
     if Fields[i] is TZField then
       THackZField(Fields[i]).FieldIndex := I+1;
   end;
@@ -1529,14 +1522,14 @@ end;
   @param Field a TDataset field object.
   @returns an original fields index or -1 otherwise.
 }
-function DefineFieldIndex(const FieldsLookupTable: TIntegerDynArray;
+function DefineFieldIndex(const FieldsLookupTable: TPointerDynArray;
   Field: TField): Integer;
 var
   I: Integer;
 begin
   Result := -1;
   for I := 0 to High(FieldsLookupTable) do
-    if FieldsLookupTable[I] = Integer(Field) then
+    if FieldsLookupTable[I] = Field then
     begin
       Result := I{$IFNDEF GENERIC_INDEX}+1{$ENDIF};
       Break;
@@ -1549,7 +1542,7 @@ end;
   @param FieldRefs a TDataset field object references.
   @returns an array with original fields indices.
 }
-function DefineFieldIndices(const FieldsLookupTable: TIntegerDynArray;
+function DefineFieldIndices(const FieldsLookupTable: TPointerDynArray;
   const FieldRefs: TObjectDynArray): TIntegerDynArray;
 var
   I: Integer;
@@ -1569,7 +1562,7 @@ end;
   Splits up a qualified object name into pieces. Catalog, schema
   and objectname.
 }
-procedure SplitQualifiedObjectName(QualifiedName: string;
+procedure SplitQualifiedObjectName(const QualifiedName: string;
   var Catalog, Schema, ObjectName: string);
 
 {$IFDEF OLDFPC}
@@ -1670,7 +1663,7 @@ end;
   Splits up a qualified object name into pieces. Catalog, schema
   and objectname.
 }
-procedure SplitQualifiedObjectName(QualifiedName: string;
+procedure SplitQualifiedObjectName(const QualifiedName: string;
   const SupportsCatalogs, SupportsSchemas: Boolean;
   var Catalog, Schema, ObjectName: string);
 var
@@ -1781,7 +1774,7 @@ end;
   @param Param the TParam where the value is assigned from
 }
 procedure SetStatementParam(Index: Integer;
-  Statement: IZPreparedStatement; Param: TParam);
+  const Statement: IZPreparedStatement; Param: TParam);
 var
   Stream: TStream;
   TempBytes: TBytes;
@@ -1838,7 +1831,7 @@ begin
           {$IFDEF TPARAM_HAS_ASBYTES}
           Bts := Param.AsBytes;
           SetLength(TempBytes, High(Bts)+1);
-          System.Move(PAnsichar(Bts)^, PAnsichar(TempBytes)^, High(Bts)+1);
+          {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(PAnsichar(Bts)^, PAnsichar(TempBytes)^, High(Bts)+1);
           {$ELSE}
             {$IFDEF WITHOUT_VARBYTESASSTRING}
             V := Param.Value;

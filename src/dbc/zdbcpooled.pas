@@ -52,8 +52,6 @@ interface
 
 {$I ZDbc.inc}
 
-implementation
-
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} Contnrs, DateUtils, SysUtils,
   SyncObjs,
@@ -129,7 +127,7 @@ type
     function GetConnection: IZConnection;
   protected // IZConnection
     FClientCodePage: String;
-    procedure CheckCharEncoding(CharSet: String;
+    procedure CheckCharEncoding(const CharSet: String;
       const DoArrange: Boolean = False);
     function GetClientCodePageInformations: PZCodePage; //EgonHugeist
     function GetClientVariantManager: IZClientVariantManager;
@@ -152,7 +150,7 @@ type
     procedure CommitPrepared(const transactionid: string);
     procedure RollbackPrepared(const transactionid: string);
     function PingServer: Integer;
-    function EscapeString(Value : RawByteString) : RawByteString;
+    function EscapeString(const Value : RawByteString) : RawByteString;
     procedure Open;
     procedure Close;
     function IsClosed: Boolean;
@@ -172,6 +170,8 @@ type
     procedure ClearWarnings;
     function UseMetadata: boolean;
     procedure SetUseMetadata(Value: Boolean);
+    function GetURL: String;
+
   public
     constructor Create(const ConnectionPool: TConnectionPool);
     destructor Destroy; override;
@@ -185,6 +185,7 @@ type
     function GetTestMode : Byte;
     procedure SetTestMode(Mode: Byte);
     {$ENDIF}
+    function GetServerProvider: TZServerProvider;
   end;
 
   {$WARNINGS OFF}
@@ -207,6 +208,10 @@ type
     destructor Destroy; override;
   end;
   {$WARNINGS ON}
+
+implementation
+
+uses ZDbcProperties;
 
 { TConnectionPool }
 
@@ -331,7 +336,7 @@ begin
     if FWait then
       Sleep(100)
     else
-      raise Exception.Create(ClassName + '.Acquire'+LineEnding+'O pool de conexatingiu o limite maximo');
+      raise Exception.Create(ClassName + '.Acquire'+LineEnding+'Connection pool reached the maximum limit');
             //2013-10-13 mse: please replace non ASCII characters (>127) by the 
             //#nnn notation in order to have encoding independent sources
   end;
@@ -459,6 +464,16 @@ begin
   FUseMetadata := Value;
 end;
 
+{**
+  get current connection URL from TZURL. Nice to clone the connection by using
+  the IZDriverManager
+  @return true if connection is read-only and false otherwise
+}
+function TZDbcPooledConnection.GetURL: String;
+begin
+  Result := GetConnection.GetURL
+end;
+
 procedure TZDbcPooledConnection.Close;
 begin
   if FConnection <> nil then
@@ -499,7 +514,7 @@ begin
   Result := GetConnection.CreateStatementWithParams(Info);
 end;
 
-function TZDbcPooledConnection.EscapeString(Value: RawByteString): RawByteString;
+function TZDbcPooledConnection.EscapeString(const Value: RawByteString): RawByteString;
 begin
   Result := GetConnection.EscapeString(Value);
 end;
@@ -544,9 +559,14 @@ begin
   Result := GetConnection.GetParameters;
 end;
 
+function TZDbcPooledConnection.GetServerProvider: TZServerProvider;
+begin
+  Result := GetConnection.GetServerProvider;
+end;
+
 function TZDbcPooledConnection.GetTransactionIsolation: TZTransactIsolationLevel;
 begin
-  Result := GetConnection.GetTransactionIsolation;  
+  Result := GetConnection.GetTransactionIsolation;
 end;
 
 function TZDbcPooledConnection.GetWarnings: EZSQLWarning;
@@ -645,7 +665,7 @@ end;
     default. This means it ignores the choosen Client-CharacterSet and sets a
     "more" Zeos-Compatible Client-CharacterSet if known.
 }
-procedure TZDbcPooledConnection.CheckCharEncoding(CharSet: String;
+procedure TZDbcPooledConnection.CheckCharEncoding(const CharSet: String;
   const DoArrange: Boolean = False);
 begin
   Self.GetConSettings.ClientCodePage := GetIZPlainDriver.ValidateCharEncoding(CharSet, DoArrange);
@@ -767,7 +787,7 @@ var
   TempURL: TZURL;
   I: Integer;
   ConnectionPool: TConnectionPool;
-  ConnetionTimeout: Integer;
+  ConnectionTimeout: Integer;
   MaxConnections: Integer;
   Wait: Boolean;
 begin
@@ -800,10 +820,10 @@ begin
     //
     if ConnectionPool = nil then
     begin
-      ConnetionTimeout := StrToIntDef(TempURL.Properties.Values['ConnectionTimeout'], 0);
-      MaxConnections := StrToIntDef(TempURL.Properties.Values['MaxConnections'], 0);
-      Wait := StrToBoolDef(TempURL.Properties.Values['Wait'], True);
-      ConnectionPool := TConnectionPool.Create(TempURL.URL, ConnetionTimeout, MaxConnections, Wait);
+      ConnectionTimeout := StrToIntDef(TempURL.Properties.Values[ConnProps_ConnectionTimeout], 0);
+      MaxConnections := StrToIntDef(TempURL.Properties.Values[ConnProps_MaxConnections], 0);
+      Wait := StrToBoolDef(TempURL.Properties.Values[ConnProps_Wait], True);
+      ConnectionPool := TConnectionPool.Create(TempURL.URL, ConnectionTimeout, MaxConnections, Wait);
       PoolList.Add(ConnectionPool);
       URLList.Add(TempURL.URL);
     end;
@@ -834,9 +854,9 @@ begin
   Result := DriverManager.GetDriver(GetEmbeddedURL(URL)).GetPropertyInfo(GetEmbeddedURL(URL), Info);
   if Result = nil then
     Result := TStringList.Create;
-  Result.Values['ConnectionTimeout'] := '0';
-  Result.Values['MaxConnections'] := '0';
-  Result.Values['Wait'] := 'True';
+  Result.Values[ConnProps_ConnectionTimeout] := '0';
+  Result.Values[ConnProps_MaxConnections] := '0';
+  Result.Values[ConnProps_Wait] := 'True';
 end;
 
 function TZDbcPooledConnectionDriver.GetSubVersion: Integer;

@@ -60,7 +60,7 @@ interface
 uses
   Types, Classes, ZClasses, ZCompatibility, ZDbcIntfs,
   ZConnectionGroup, ZAbstractConnection, ZURL,
-{$IFDEF BDS4_UP}
+{$IFDEF WITH_UNIT_WIDESTRINGS}
   WideStrings,
 {$ENDIF}
 {$IFNDEF FPC}
@@ -229,12 +229,11 @@ uses SysUtils, Forms, Dialogs, Controls, DB, TypInfo, ZSysUtils, ZSelectSchema
 {$IFDEF USE_METADATA}
   , ZSqlMetadata
 {$ENDIF}
-{$IFNDEF UNIX}
-  {$IFNDEF FPC}
-  {$IFDEF ENABLE_ADO}
-, ZDbcAdoUtils
-  {$ENDIF}
-  {$ENDIF}
+  {$IF defined(ENABLE_ADO) or defined(ENABLE_OLEDB)}
+, ZDbcOleDBUtils
+  {$IFEND}
+{$IFDEF ENABLE_ODBC}
+,ZDbcODBCUtils
 {$ENDIF}
 {$IFDEF SHOW_WARNING}
 ,ZMessages
@@ -410,7 +409,7 @@ begin
     begin
       try
         // Look for the Tables of the defined Catalog and Schema
-        ResultSet := Metadata.GetTables(Catalog, Schema, '', nil);
+        ResultSet := Metadata.GetTables(Catalog, Metadata.AddEscapeCharToWildcards(Schema), '', nil);
         while ResultSet.Next do
           begin
             TableName := ResultSet.GetStringByName('TABLE_NAME');
@@ -460,7 +459,7 @@ var
   Catalog, Schema: string;
   ProcedureName: string;
 
-  procedure ExtractOverload(OverloadSeparator: String);
+  procedure ExtractOverload(const OverloadSeparator: String);
   var
     I: Integer;
     SL: TStrings;
@@ -507,7 +506,7 @@ begin
       try
         Metadata := Connection.DbcConnection.GetMetadata;
         // Look for the Procedures
-        ResultSet := Metadata.GetProcedures(Catalog, Schema, '');
+        ResultSet := Metadata.GetProcedures(Catalog, Metadata.AddEscapeCharToWildcards(Schema), '');
         while ResultSet.Next do
         begin
           ProcedureName := ResultSet.GetStringByName('PROCEDURE_NAME');
@@ -573,6 +572,7 @@ begin
       try
         Metadata := Connection.DbcConnection.GetMetadata;
         // Look for the Procedures of the defined Catalog and Schema
+        Schema := Metadata.AddEscapeCharToWildcards(Schema);
         ResultSet := Metadata.GetSequences(Catalog, Schema, '');
         while ResultSet.Next do
           List.Add(ResultSet.GetStringByName('SEQUENCE_NAME'));
@@ -784,15 +784,19 @@ begin
     if ((GetZComponent as TZAbstractConnection).Protocol = 'mssql') or
     ((GetZComponent as TZAbstractConnection).Protocol = 'sybase') then
       inherited
-{$IFNDEF UNIX}
-{$IFNDEF FPC}
-{$IFDEF ENABLE_ADO}
+{$IF defined(ENABLE_ADO) or defined(ENABLE_OLEDB)}
     else
-    if ((GetZComponent as TZAbstractConnection).Protocol = 'ado') then
-      (GetZComponent as TZAbstractConnection).Database := PromptDataSource(Application.Handle,
-        (GetZComponent as TZAbstractConnection).Database)
-{$ENDIF}
-{$ENDIF}
+    if ((GetZComponent as TZAbstractConnection).Protocol = 'ado') or
+       ((GetZComponent as TZAbstractConnection).Protocol = 'OleDB') then
+      (GetZComponent as TZAbstractConnection).Database := String(PromptDataSource({$IFDEF FPC}Application.MainFormHandle{$ELSE}Application.Handle{$ENDIF},
+        ZWideString((GetZComponent as TZAbstractConnection).Database)))
+{$IFEND}
+{$IFDEF ENABLE_ODBC}
+    else
+    if ((GetZComponent as TZAbstractConnection).Protocol = 'odbc_a') or
+       ((GetZComponent as TZAbstractConnection).Protocol = 'odbc_w') then
+      (GetZComponent as TZAbstractConnection).Database := GetConnectionString({%H-}Pointer({$IFDEF FPC}Application.MainFormHandle{$ELSE}Application.Handle{$ENDIF}),
+        (GetZComponent as TZAbstractConnection).Database, (GetZComponent as TZAbstractConnection).LibLocation)
 {$ENDIF}
     else
     begin
@@ -979,7 +983,7 @@ begin
     try
       Metadata := Connection.DbcConnection.GetMetadata;
       // Look for the Columns of the defined Catalog, Schema and TableName
-      ResultSet := Metadata.GetColumns(Catalog, Schema, TableName, '');
+      ResultSet := Metadata.GetColumns(Catalog, Metadata.AddEscapeCharToWildcards(Schema), Metadata.AddEscapeCharToWildcards(TableName), '');
       while ResultSet.Next do
         if List.IndexOf(ResultSet.GetStringByName('COLUMN_NAME')) = -1 then
           List.Add(ResultSet.GetStringByName('COLUMN_NAME'));
@@ -1158,15 +1162,19 @@ begin
     if ((GetZComponent as TZConnectionGroup).Protocol = 'mssql') or
     ((GetZComponent as TZConnectionGroup).Protocol = 'sybase') then
       inherited
-{$IFNDEF UNIX}
-{$IFNDEF FPC}
-{$IFDEF ENABLE_ADO}
+{$IF defined(ENABLE_ADO) or defined(ENABLE_OLEDB)}
     else
-    if ((GetZComponent as TZConnectionGroup).Protocol = 'ado') then
-      (GetZComponent as TZConnectionGroup).Database := PromptDataSource(Application.Handle,
-        (GetZComponent as TZConnectionGroup).Database)
-{$ENDIF}
-{$ENDIF}
+    if ((GetZComponent as TZConnectionGroup).Protocol = 'ado') or
+       ((GetZComponent as TZConnectionGroup).Protocol = 'OleDB') then
+      (GetZComponent as TZConnectionGroup).Database := String(PromptDataSource({$IFDEF FPC}Application.MainFormHandle{$ELSE}Application.Handle{$ENDIF},
+        ZWideString((GetZComponent as TZConnectionGroup).Database)))
+{$IFEND}
+{$IFDEF ENABLE_ODBC}
+    else
+    if ((GetZComponent as TZConnectionGroup).Protocol = 'odbc_a') or
+       ((GetZComponent as TZConnectionGroup).Protocol = 'odbc_w') then
+      (GetZComponent as TZConnectionGroup).Database := GetConnectionString({%H-}Pointer({$IFDEF FPC}Application.MainFormHandle{$ELSE}Application.Handle{$ENDIF}),
+        (GetZComponent as TZConnectionGroup).Database, (GetZComponent as TZConnectionGroup).LibraryLocation)
 {$ENDIF}
     else
     begin

@@ -78,7 +78,7 @@ function ConvertTDSTypeToSqlType(const FieldType: TTDSType;
   @param string field type value
   @result the SqlType field type value
 }
-function ConvertDBLibTypeToSqlType({%H-}Value: string): TZSQLType;
+function ConvertDBLibTypeToSqlType(const {%H-}Value: string): TZSQLType;
 
 {**
   Converts ZDBC SQL types into MS SQL native types.
@@ -108,7 +108,7 @@ function ConvertDBLibNullability(DBLibNullability: Byte): TZColumnNullableType;
   @return a string representation of the parameter.
 }
 function PrepareSQLParameter(const Value: TZVariant; const ParamType: TZSQLType;
-  ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
+  const ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
   const NChar: Boolean = False): RawByteString;
 
 implementation
@@ -168,11 +168,8 @@ begin
         Result := stUnicodeStream
       else
         Result := stAsciiStream;
-    tdsUnique: //EH: need to be checket(have no tascase for this type) -> unique identifier?
-      if CtrlsCPType = cCP_UTF16 then
-        Result := stUnicodeString
-      else
-        Result := stString;
+    tdsUnique:
+      Result := stGUID;
     tdsBinary, tdsVarBinary, tdsBigBinary, tdsBigVarBinary:
       Result := stBytes;
     tdsIntN:
@@ -218,7 +215,7 @@ end;
   @param string field type value
   @result the SqlType field type value
 }
-function ConvertDBLibTypeToSqlType(Value: string): TZSQLType;
+function ConvertDBLibTypeToSqlType(const Value: string): TZSQLType;
 begin
   Result := stUnknown;
 end;
@@ -324,7 +321,7 @@ end;
   @return a string representation of the parameter.
 }
 function PrepareSQLParameter(const Value: TZVariant; const ParamType: TZSQLType;
-  ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
+  const ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
   const NChar: Boolean = False): RawByteString;
 var
   TempBytes: TBytes;
@@ -338,10 +335,7 @@ begin
   begin
     case ParamType of
       stBoolean:
-        if ClientVarManager.GetAsBoolean(Value) then
-          Result := '1'
-        else
-          Result := '0';
+        Result := BoolStrIntsRaw[ClientVarManager.GetAsBoolean(Value)];
       stByte, stShort, stWord, stSmall, stLongWord, stInteger, stULong, stLong,
       stFloat, stDouble, stCurrency, stBigDecimal:
         Result := ClientVarManager.GetAsRawByteString(Value);
@@ -357,6 +351,15 @@ begin
             Result := 'NULL'
           else
             Result := GetSQLHexAnsiString(PAnsiChar(TempBytes), Length(TempBytes), True);
+        end;
+      stGuid:
+        begin
+          TempBytes := ClientVarManager.GetAsBytes(Value);
+          case Length(TempBytes) of
+            0: Result := 'NULL';
+            16: Result := GUIDToRaw(TempBytes);
+            else EZSQLException.Create('The TBytes was not 16 bytes long when trying to convert it to a GUID');
+          end;
         end;
       stDate:
         Result := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(Value),

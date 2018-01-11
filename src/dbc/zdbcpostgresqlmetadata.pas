@@ -103,7 +103,7 @@ type
 //    function GetDriverVersion: string; override; -> Same as parent
     function GetDriverMajorVersion: Integer; override;
     function GetDriverMinorVersion: Integer; override;
-    function GetServerVersion: string;
+    function GetServerVersion: string; override;
     function HasMinimumServerVersion(MajorVersion: Integer;
       MinorVersion: Integer): Boolean; // was TZPostgreSQLDatabaseMetadata.HaveMinimumServerVersion
 
@@ -241,10 +241,10 @@ type
     // (technobot) should any of these be moved to TZPostgreSQLDatabaseInfo?:
     function GetPostgreSQLType(Oid: Integer): string;
     function GetSQLTypeByOid(Oid: Integer): TZSQLType;
-    function GetSQLTypeByName(TypeName: string): TZSQLType;
-    function TableTypeSQLExpression(TableType: string; UseSchemas: Boolean):
+    function GetSQLTypeByName(const TypeName: string): TZSQLType;
+    function TableTypeSQLExpression(const TableType: string; UseSchemas: Boolean):
       string;
-    procedure ParseACLArray(List: TStrings; AclString: string);
+    procedure ParseACLArray(List: TStrings; const AclString: string);
     function GetPrivilegeName(Permission: char): string;
     // (technobot) end of questioned section
 
@@ -292,7 +292,7 @@ implementation
 
 uses
   //Math,
-  ZFastCode, ZMessages, ZSysUtils, ZDbcUtils, ZDbcPostgreSql;
+  ZFastCode, ZMessages, ZSysUtils, ZDbcPostgreSql;
 
 { TZPostgreSQLDatabaseInfo }
 
@@ -1281,7 +1281,7 @@ begin
   begin
     if not Next then
       raise Exception.Create(SUnknownError); //CHANGE IT!
-    Result := GetInt(1);
+    Result := GetInt(FirstDbcIndex);
     Close;
   end;
 end;
@@ -1497,7 +1497,7 @@ function TZPostgreSQLDatabaseMetadata.UncachedGetProcedureColumns(const Catalog:
   const SchemaPattern: string; const ProcedureNamePattern: string;
   const ColumnNamePattern: string): IZResultSet;
 
-  procedure InsertProcedureColumnRow(AResultSet: IZResultSet;
+  procedure InsertProcedureColumnRow(const AResultSet: IZResultSet;
     const ASchema, AProcedureName, AColumnName: string;
     const AColumnType, ADataType: integer; const ATypeName: string;
     const ANullable: integer);
@@ -2050,11 +2050,12 @@ const
   description_index = {$IFDEF GENERIC_INDEX}9{$ELSE}10{$ENDIF};
 var
   Len: NativeUInt;
-  TypeOid, AttTypMod: Integer;
+  TypeOid, AttTypMod, Precision: Integer;
   SQL, PgType: string;
   SQLType: TZSQLType;
   CheckVisibility: Boolean;
   ColumnNameCondition, TableNameCondition, SchemaCondition: string;
+label FillSizes;
 begin
   CheckVisibility := (GetConnection as IZPostgreSQLConnection).CheckFieldVisibility; //http://zeoslib.sourceforge.net/viewtopic.php?f=40&t=11174
   SchemaCondition := ConstructNameCondition(SchemaPattern,'n.nspname');
@@ -2134,20 +2135,36 @@ begin
 
       if (PgType = 'bpchar') or (PgType = 'varchar') or (PgType = 'enum') then
       begin
-        if AttTypMod <> -1 then
-          Result.UpdateInt(TableColColumnSizeIndex, GetFieldSize(SQLType, ConSettings, (AttTypMod - 4),
-            ConSettings.ClientCodePage.CharWidth))
-        else
+        if AttTypMod <> -1 then begin
+          Precision := AttTypMod - 4;
+FillSizes:
+          Result.UpdateInt(TableColColumnSizeIndex, Precision);
+          if SQLType = stString then begin
+            Result.UpdateInt(TableColColumnBufLengthIndex, Precision * ConSettings^.ClientCodePage^.CharWidth +1);
+            Result.UpdateInt(TableColColumnCharOctetLengthIndex, Precision * ConSettings^.ClientCodePage^.CharWidth);
+          end else if SQLType = stUnicodeString then begin
+            Result.UpdateInt(TableColColumnBufLengthIndex, (Precision+1) shl 1);
+            Result.UpdateInt(TableColColumnCharOctetLengthIndex, Precision shl 1);
+          end;
+        end else
           if (PgType = 'varchar') then
             if ( (GetConnection as IZPostgreSQLConnection).GetUndefinedVarcharAsStringLength = 0 ) then
             begin
               Result.UpdateInt(TableColColumnTypeIndex, Ord(GetSQLTypeByOid(25))); //Assume text-lob instead
               Result.UpdateInt(TableColColumnSizeIndex, 0); // need no size for streams
             end
-            else //keep the string type but with user defined count of chars
-              Result.UpdateInt(TableColColumnSizeIndex, (GetConnection as IZPostgreSQLConnection).GetUndefinedVarcharAsStringLength )
+            else begin //keep the string type but with user defined count of chars
+              Precision := (GetConnection as IZPostgreSQLConnection).GetUndefinedVarcharAsStringLength;
+              goto FillSizes;
+            end
           else
             Result.UpdateInt(TableColColumnSizeIndex, 0);
+      end
+      else if (PgType = 'uuid') then
+      begin
+        // I set break point and see code reaching here. Below assignments, I have no idea what I am doing.
+        Result.UpdateInt(TableColColumnBufLengthIndex, 16); // MSSQL returns 16 here - which makes sense since a GUID is 16 bytes long.
+        // TableColColumnCharOctetLengthIndex is removed - PG returns 0 and in the dblib driver 0 is also used, although MSSQL returns null...
       end
       else if (PgType = 'numeric') or (PgType = 'decimal') then
       begin
@@ -3222,8 +3239,6 @@ end;
   @return <code>ResultSet</code> - each row is an SQL type description
 }
 function TZPostgreSQLDatabaseMetadata.UncachedGetTypeInfo: IZResultSet;
-const
-  typname_Index = {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF};
 var
   SQL: string;
   Len: NativeUInt;
@@ -3239,8 +3254,8 @@ begin
       while Next do
       begin
         Result.MoveToInsertRow;
-        Result.UpdatePAnsiChar(TypeInfoTypeNameIndex, GetPAnsiChar(typname_Index, Len), @Len);
-        Result.UpdateInt(TypeInfoDataTypeIndex, Ord(GetSQLTypeByName(GetString(typname_Index))));
+        Result.UpdatePAnsiChar(TypeInfoTypeNameIndex, GetPAnsiChar(FirstDbcIndex, Len), @Len);
+        Result.UpdateInt(TypeInfoDataTypeIndex, Ord(GetSQLTypeByName(GetString(FirstDbcIndex))));
         Result.UpdateInt(TypeInfoPecisionIndex, 9);
         Result.UpdateInt(TypeInfoNullAbleIndex, Ord(ntNoNulls));
         Result.UpdateBoolean(TypeInfoCaseSensitiveIndex, False);
@@ -3396,14 +3411,14 @@ begin
 end;
 
 function TZPostgreSQLDatabaseMetadata.GetSQLTypeByName(
-  TypeName: string): TZSQLType;
+  const TypeName: string): TZSQLType;
 begin
   Result := PostgreSQLToSQLType(
     GetConnection as IZPostgreSQLConnection, TypeName);
 end;
 
 function TZPostgreSQLDatabaseMetadata.TableTypeSQLExpression(
-  TableType: string; UseSchemas: Boolean): string;
+  const TableType: string; UseSchemas: Boolean): string;
 begin
   if UseSchemas then
   begin
@@ -3463,7 +3478,7 @@ begin
 end;
 
 procedure TZPostgreSQLDatabaseMetadata.ParseACLArray(
-  List: TStrings; AclString: string);
+  List: TStrings; const AclString: string);
 var
   PrevChar: Char;
   InQuotes: Boolean;

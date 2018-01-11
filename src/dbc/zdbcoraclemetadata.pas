@@ -1300,12 +1300,12 @@ var
         end;
   end;
 
-  procedure InsertProcedureColumnValues(Source: IZResultSet; IsResultParam: Boolean = False);
+  procedure InsertProcedureColumnValues(const Source: IZResultSet; IsResultParam: Boolean = False);
   var
-    TypeName, SubTypeName: string;
+    TypeName{, SubTypeName}: string;
   begin
     TypeName := Source.GetString(ColumnIndexes[4]);
-    SubTypeName := Source.GetString(ColumnIndexes[5]);
+    //SubTypeName := Source.GetString(ColumnIndexes[5]);
     PackageName := Source.GetString(ColumnIndexes[8]);
     ProcName := Source.GetString(ColumnIndexes[9]);
 
@@ -1346,11 +1346,11 @@ var
     Result.InsertRow;
   end;
 
-  function GetColumnSQL(PosChar: String; Package: String = ''): String;
+  function GetColumnSQL(const PosChar: String; const Package: String = ''): String;
   var
     OwnerCondition, PackageNameCondition, PackageAsProcCondition, PackageProcNameCondition: string;
 
-    procedure SplitPackageAndProc(Value: String);
+    procedure SplitPackageAndProc(const Value: String);
     var
       iPos: Integer;
     begin
@@ -1406,8 +1406,6 @@ var
   end;
 
   procedure GetMoreProcedures;
-  const
-    ObjectNameIndex = {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF};
   var
     i: Integer;
     PackageNameCondition: String;
@@ -1419,7 +1417,7 @@ var
     TempSet := IZStmt.ExecuteQuery('select object_name from user_arguments '
                + PackageNameCondition + ' GROUP BY object_name order by object_name');
     while TempSet.Next do
-      Procs.Add(TempSet.GetString(ObjectNameIndex));
+      Procs.Add(TempSet.GetString(FirstDbcIndex));
     TempSet.Close;
     for i := 0 to Procs.Count -1 do
     begin
@@ -1430,8 +1428,6 @@ var
   end;
 
   function CheckSchema: Boolean;
-  const
-    CountIndex = {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF};
   begin
     if TmpSchemaPattern = '' then
       Result := False
@@ -1439,7 +1435,7 @@ var
       with GetConnection.CreateStatement.ExecuteQuery('SELECT COUNT(*) FROM ALL_USERS WHERE '+ConstructNameCondition(TmpSchemaPattern,'username')) do
       begin
         Next;
-        Result := GetInt(CountIndex) > 0;
+        Result := GetInt(FirstDbcIndex) > 0;
         Close;
       end;
   end;
@@ -1686,6 +1682,7 @@ var
   SQL, oDataType: string;
   SQLType: TZSQLType;
   OwnerCondition,TableCondition,ColumnCondition: String;
+  FieldSize: Integer;
 
   function CreateWhere: String;
   begin
@@ -1715,7 +1712,7 @@ begin
   SQL := 'SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE,'
     + ' DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, '
     + ' DATA_DEFAULT, COLUMN_ID FROM SYS.ALL_TAB_COLUMNS'
-    + CreateWhere;
+    + CreateWhere+' order by COLUMN_ID';
 
   with GetConnection.CreateStatement.ExecuteQuery(SQL) do
   begin
@@ -1730,9 +1727,17 @@ begin
         GetInt(DATA_PRECISION_Index), GetInt(DATA_SCALE_Index), ConSettings.CPType);
       Result.UpdateByte(TableColColumnTypeIndex, Ord(SQLType));
       Result.UpdatePAnsiChar(TableColColumnTypeNameIndex, GetPAnsiChar(DATA_TYPE_Index, Len), @Len);
-      Result.UpdateInt(TableColColumnSizeIndex, GetFieldSize(SQLType, ConSettings,
-        GetInt(DATA_LENGTH_Index), ConSettings.ClientCodePage.CharWidth));
-      //Result.UpdateNull(TableColColumnBufLengthIndex);
+      FieldSize := GetInt(DATA_LENGTH_Index);
+      if SQLType = stString then begin
+        Result.UpdateInt(TableColColumnBufLengthIndex, FieldSize * ConSettings^.ClientCodePage^.CharWidth +1);
+        Result.UpdateInt(TableColColumnCharOctetLengthIndex, FieldSize * ConSettings^.ClientCodePage^.CharWidth);
+      end else if SQLType = stUnicodeString then begin
+        Result.UpdateInt(TableColColumnBufLengthIndex, (FieldSize+1) shl 1);
+        Result.UpdateInt(TableColColumnCharOctetLengthIndex, FieldSize shl 1);
+      end else if SQLType = stBytes then
+        Result.UpdateInt(TableColColumnBufLengthIndex, FieldSize)
+      else if not (SQLType in [stAsciiStream, stUnicodeStream, stBinaryStream]) then
+        Result.UpdateInt(TableColColumnBufLengthIndex, ZSQLTypeToBuffSize(SQLType));
       Result.UpdateInt(TableColColumnDecimalDigitsIndex, GetInt(DATA_PRECISION_Index));
       Result.UpdateInt(TableColColumnNumPrecRadixIndex, GetInt(DATA_SCALE_Index));
 
@@ -1748,7 +1753,7 @@ begin
       end;
 
       Result.UpdatePAnsiChar(TableColColumnColDefIndex, GetPAnsiChar(DATA_DEFAULT_Index, Len), @Len);
-      Result.UpdateInt(TableColColumnOrdPosIndex, GetInt(COLUMN_ID_Index){$IFDEF GENERIC_INDEX}-1{$ENDIF});
+      Result.UpdateInt(TableColColumnOrdPosIndex, GetInt(COLUMN_ID_Index));
 
       Result.UpdateBoolean(TableColColumnCaseSensitiveIndex,
         IC.IsCaseSensitive(GetString(COLUMN_NAME_Index)));

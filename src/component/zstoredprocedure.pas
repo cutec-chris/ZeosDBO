@@ -75,8 +75,8 @@ type
   protected
     function CreateStatement(const SQL: string; Properties: TStrings):
       IZPreparedStatement; override;
-    procedure SetStatementParams(Statement: IZPreparedStatement;
-      ParamNames: TStringDynArray; Params: TParams;
+    procedure SetStatementParams(const Statement: IZPreparedStatement;
+      const ParamNames: TStringDynArray; Params: TParams;
       DataLink: TDataLink); override;
     procedure InternalOpen; override;
     procedure InternalClose; override;
@@ -150,6 +150,7 @@ begin
     else
     begin //i need allways all types to cast and there names
       SplitQualifiedObjectName(Trim(SQL), Catalog, Schema, ObjectName);
+      Schema := Connection.DbcConnection.GetMetadata.AddEscapeCharToWildcards(Schema);
       ObjectName := Connection.DbcConnection.GetMetadata.AddEscapeCharToWildcards(ObjectName);
       FMetaResultSet := Connection.DbcConnection.GetMetadata.GetProcedureColumns(Catalog, Schema, ObjectName, '');
     end;
@@ -185,8 +186,8 @@ end;
 {$IFDEF FPC}
   {$HINTS OFF}
 {$ENDIF}
-procedure TZStoredProc.SetStatementParams(Statement: IZPreparedStatement;
-  ParamNames: TStringDynArray; Params: TParams; DataLink: TDataLink);
+procedure TZStoredProc.SetStatementParams(const Statement: IZPreparedStatement;
+  const ParamNames: TStringDynArray; Params: TParams; DataLink: TDataLink);
 var
   I: Integer;
   Param: TParam;
@@ -347,6 +348,7 @@ begin
           Connection.DbcConnection.GetMetadata.GetDatabaseInfo.SupportsCatalogsInProcedureCalls,
           Connection.DbcConnection.GetMetadata.GetDatabaseInfo.SupportsSchemasInProcedureCalls,
           Catalog, Schema, ObjectName);
+        Schema := Connection.DbcConnection.GetMetadata.AddEscapeCharToWildcards(Schema);
         ObjectName := Connection.DbcConnection.GetMetadata.AddEscapeCharToWildcards(ObjectName);
         FMetaResultSet := Connection.DbcConnection.GetMetadata.GetProcedureColumns(Catalog, Schema, ObjectName, '');
         OldParams := TParams.Create;

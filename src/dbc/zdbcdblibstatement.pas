@@ -69,12 +69,13 @@ type
     FResults: IZCollection;
     FRetrievedResultSet: IZResultSet;
     FRetrievedUpdateCount: Integer;
+    FUserEncoding: TZCharEncoding;
 
-    procedure InternalExecuteStatement(SQL: RawByteString);
+    procedure InternalExecuteStatement(const SQL: RawByteString);
     procedure FetchResults; virtual;
 
   public
-    constructor Create(Connection: IZConnection; Info: TStrings);
+    constructor Create(const Connection: IZConnection; Info: TStrings);
     procedure Close; override;
 
     function GetMoreResults: Boolean; override;
@@ -89,13 +90,13 @@ type
   private
     FPlainDriver: IZDBLibPlainDriver;
   protected
-    function GetEscapeString(Value: string): string;
+    function GetEscapeString(const Value: string): string;
     function PrepareAnsiSQLQuery: RawByteString; override;
     function PrepareAnsiSQLParam(ParamIndex: Integer;
       const NChar: Boolean): RawByteString; reintroduce;
     function CreateExecStatement: IZStatement; override;
   public
-    constructor Create(Connection: IZConnection; SQL: string; Info: TStrings);
+    constructor Create(const Connection: IZConnection; const SQL: string; Info: TStrings);
     function GetMetaData: IZResultSetMetaData; override;
 
     function ExecuteQueryPrepared: IZResultSet; override;
@@ -112,6 +113,7 @@ type
     FLastRowsAffected: Integer;//Workaround for sybase
     FRetrievedResultSet: IZResultSet;
     FRetrievedUpdateCount: Integer;
+    FUserEncoding: TZCharEncoding;
 
     procedure FetchResults; virtual;
     procedure FetchRowCount; virtual;
@@ -119,7 +121,7 @@ type
   protected
     procedure SetInParamCount(const NewParamCount: Integer); override;
   public
-    constructor Create(Connection: IZConnection; ProcName: string; Info: TStrings);
+    constructor Create(const Connection: IZConnection; const ProcName: string; Info: TStrings);
     procedure Close; override;
 
     procedure RegisterOutParameter(ParameterIndex: Integer;
@@ -154,8 +156,9 @@ implementation
 uses
   Types, Math,
   ZDbcLogging, ZDbcCachedResultSet, ZDbcDbLibUtils, ZDbcDbLibResultSet,
-  ZVariant, ZDbcUtils, ZEncoding, ZDbcResultSet
-  {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
+  ZVariant, ZDbcUtils, ZEncoding, ZDbcResultSet, ZDbcProperties
+  {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF}
+  {$IFDEF FAST_MOVE}, ZFastCode{$ENDIF};
 
 constructor TZUpdateCount.Create(ACount: Integer);
 begin
@@ -180,7 +183,7 @@ end;
   @param Connection a database connection object.
   @param Info a statement parameters.
 }
-constructor TZDBLibStatement.Create(Connection: IZConnection; Info: TStrings);
+constructor TZDBLibStatement.Create(const Connection: IZConnection; Info: TStrings);
 begin
   inherited Create(Connection, Info);
   Connection.QueryInterface(IZDBLibConnection, FDBLibConnection);
@@ -189,6 +192,16 @@ begin
   FHandle := FDBLibConnection.GetConnectionHandle;
   ResultSetType := rtScrollInsensitive;
   FResults := TZCollection.Create;
+  {note: this is a hack! Purpose is to notify Zeos all Charakter columns are
+    UTF8-encoded. e.g. N(VAR)CHAR. Initial idea is made for MSSQL where we've NO
+    valid tdsType to determine (Var)Char(Ansi-Encoding) or N(Var)Char encoding
+    So this is stopping all encoding detections and increases the performance in
+    a high rate. If Varchar fields are fetched you Should use a cast to N-Fields!
+    Else all results are invalid!!!!! Just to invoke later questions!}
+  if DefineStatementParameter(Self, DSProps_ResetCodePage, '') = 'UTF8' then
+    FUserEncoding := ceUTF8
+  else
+    Self.FUserEncoding := ceDefault;
 end;
 
 procedure TZDBLibStatement.Close;
@@ -211,7 +224,7 @@ end;
   @param Handle a DBLib connection handle.
   @sql string containing the statements to execute
 }
-procedure TZDBLibStatement.InternalExecuteStatement(SQL: RawByteString);
+procedure TZDBLibStatement.InternalExecuteStatement(const SQL: RawByteString);
 var Ansi: RawByteString;
 begin
   if FDBLibConnection.GetProvider = dpMsSQL then
@@ -300,7 +313,10 @@ begin
   begin
     if FPlainDriver.dbcmdrow(FHandle) = DBSUCCEED then
     begin
-      NativeResultSet := TZDBLibResultSet.Create(Self, Self.SQL);
+      {EH: Developer notes:
+       the TDS protocol does NOT support any stmt handles. All actions are
+       executed sequentially so in ALL cases we need cached Results NO WAY araound!!!}
+      NativeResultSet := TZDBLibResultSet.Create(Self, Self.SQL, FUserEncoding);
       NativeResultSet.SetConcurrency(rcReadOnly);
       CachedResultSet := TZCachedResultSet.Create(NativeResultSet,
         Self.SQL, TZDBLibCachedResolver.Create(Self, NativeResultSet.GetMetaData), ConSettings);
@@ -428,8 +444,8 @@ end;
   @param Info a statement parameters.
   @param Handle a connection handle pointer.
 }
-constructor TZDBLibPreparedStatementEmulated.Create(Connection: IZConnection;
-  SQL: string; Info: TStrings);
+constructor TZDBLibPreparedStatementEmulated.Create(const Connection: IZConnection;
+  const SQL: string; Info: TStrings);
 begin
   inherited Create(Connection, SQL, Info);
   FPlainDriver := (Connection as IZDBLibConnection).GetPlainDriver;
@@ -442,7 +458,7 @@ end;
   @param Value a regular string.
   @return a string in DBLib escape format.
 }
-function TZDBLibPreparedStatementEmulated.GetEscapeString(Value: string): string;
+function TZDBLibPreparedStatementEmulated.GetEscapeString(const Value: string): string;
 begin
   Result := AnsiQuotedStr(Value, '''');
 end;
@@ -547,8 +563,8 @@ begin
   Result := TZDBLibStatement.Create(Connection, Info);
 end;
 
-constructor TZDBLibCallableStatement.Create(Connection: IZConnection;
-  ProcName: string; Info: TStrings);
+constructor TZDBLibCallableStatement.Create(const Connection: IZConnection;
+  const ProcName: string; Info: TStrings);
 begin
   inherited Create(Connection, ProcName, Info);
   Connection.QueryInterface(IZDBLibConnection, FDBLibConnection);
@@ -556,6 +572,16 @@ begin
     FPLainDriver := FDBLibConnection.GetPlainDriver;
   FHandle := FDBLibConnection.GetConnectionHandle;
   ResultSetType := rtScrollInsensitive;
+  {note: this is a hack! Purpose is to notify Zeos all Charakter columns are
+    UTF8-encoded. e.g. N(VAR)CHAR. Initial idea is made for MSSQL where we've NO
+    valid tdsType to determine (Var)Char(Ansi-Encoding) or N(Var)Char encoding
+    So this is stopping all encoding detections and increases the performance in
+    a high rate. If Varchar fields are fetched you Should use a cast to N-Fields!
+    Else all results are invalid!!!!! Just to invoke later questions!}
+  if DefineStatementParameter(Self, DSProps_ResetCodePage, '') = 'UTF8' then
+    FUserEncoding := ceUTF8
+  else
+    Self.FUserEncoding := ceDefault;
 end;
 
 procedure TZDBLibCallableStatement.Close;
@@ -608,7 +634,7 @@ begin
       NativeResultSet := TZDBLibResultSet.Create(Self, 'select @@rowcount');
       try
         if NativeResultset.Next then
-          FLastRowsAffected := NativeResultSet.GetInt(1);
+          FLastRowsAffected := NativeResultSet.GetInt(FirstDbcIndex);
       finally
         NativeResultset.Close;
       end;
@@ -690,31 +716,43 @@ begin
     SetInParamCount(ParameterIndex{$IFDEF GENERIC_INDEX}+1{$ENDIF});
 end;
 
+type TZDbLibParam = record
+  AsString: RawByteString;
+  CharRec: TZCharRec;
+  AsBytes: TBytes;
+  TempBlob: IZBlob;
+  case word of
+    0: (AsBoolean: Boolean);
+    1: (AsByte: Byte);
+    2: (AsSmall: SmallInt);
+    3: (AsInteger: Integer);
+    4: (AsFloat: Single);
+    5: (AsDouble: Double);
+    6: (AsDBDATETIME: DBDATETIME);
+end;
+
 function TZDBLibCallableStatement.ExecutePrepared: Boolean;
 var
   S: RawByteString;
   I, ParamIndex, DatLen: Integer;
   RetParam: Byte;
-  DatBoolean: Boolean;
-  DatByte: Byte;
-  DatSmall: SmallInt;
-  DatInteger: Integer;
-  DatFloat: Single;
-  DatDouble: Double;
-  DatString: RawByteString;
-  CharRec: TZCharRec;
-  DatDBDATETIME: DBDATETIME;
-  DatBytes: TBytes;
-  Temp: TZVariant;
   ParamType: TZSQLType;
-  TempBlob: IZBlob;
   P: Pointer;
   Len: NativeUInt;
   RetType: DBINT;
+  Temp: TZVariant;
+  Params: array of TZDbLibParam;
+
+  OutString: RawByteString;
+  OutBytes: TBytes;
+  OutDouble: Double;
+  OutDBDATETIME: DBDATETIME;
 begin
   S := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}Trim(ASql);
   if FPLainDriver.dbRPCInit(FHandle, Pointer(S), 0) <> DBSUCCEED then
     FDBLibConnection.CheckDBLibError(lcOther, 'EXECUTEPREPARED:dbRPCInit');
+
+  SetLength(Params, InParamCount);
 
   for I := 1 to InParamCount - 1 do//The 0 parameter is the return value
   begin
@@ -733,130 +771,130 @@ begin
       case ParamType of
         stBoolean:
           begin
-            DatBoolean := SoftVarManager.GetAsBoolean(InParamValues[I]);
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsBit), -1, -1, @DatBoolean);
+            Params[I].AsBoolean := SoftVarManager.GetAsBoolean(InParamValues[I]);
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsBit), -1, -1, @(Params[I].AsBoolean));
           end;
         stByte:
           begin
-            DatByte := Byte(SoftVarManager.GetAsInteger(InParamValues[I]));
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt1), -1, -1, @DatByte);
+            Params[I].AsByte := Byte(SoftVarManager.GetAsInteger(InParamValues[I]));
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt1), -1, -1, @(Params[I].AsByte));
           end;
         stShort, stSmall:
           begin
-            DatSmall := SmallInt(SoftVarManager.GetAsInteger(InParamValues[I]));
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt2), -1, -1, @DatSmall);
+            Params[I].AsSmall := SmallInt(SoftVarManager.GetAsInteger(InParamValues[I]));
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt2), -1, -1, @(Params[I].AsSmall));
           end;
         stWord, stInteger:
           begin
-            DatInteger := Integer(SoftVarManager.GetAsInteger(InParamValues[I]));
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt4), -1, -1, @DatInteger);
+            Params[I].AsInteger := Integer(SoftVarManager.GetAsInteger(InParamValues[I]));
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsInt4), -1, -1, @(Params[I].AsInteger));
           end;
         stFloat:
           begin
-            DatFloat := SoftVarManager.GetAsFloat(InParamValues[I]);
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsFlt4), -1, -1, @DatFloat);
+            Params[I].AsFloat := SoftVarManager.GetAsFloat(InParamValues[I]);
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsFlt4), -1, -1, @(Params[I].AsFloat));
           end;
         stLong, stULong, stDouble, stBigDecimal, stCurrency:
           begin
-            DatDouble := SoftVarManager.GetAsFloat(InParamValues[I]);
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsFlt8), -1, -1, @DatDouble);
+            Params[I].AsDouble := SoftVarManager.GetAsFloat(InParamValues[I]);
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsFlt8), -1, -1, @(Params[I].AsDouble));
           end;
         stString, stUnicodeString:
           if IsNCharIndex[i] then
           begin
-            CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], zCP_UTF8);
+            Params[I].CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], zCP_UTF8);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsChar),
-              MaxInt, Max(1, CharRec.Len), CharRec.P);
+              -1, Max(1, Params[I].CharRec.Len), Params[I].CharRec.P);
           end
           else
           begin
-            CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], ConSettings^.ClientCodePage^.CP);
+            Params[I].CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], ConSettings^.ClientCodePage^.CP);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsChar),
-              MaxInt, Max(1, CharRec.Len), CharRec.P);
+              -1, Max(1, Params[I].CharRec.Len), Params[I].CharRec.P);
           end;
         stDate:
           begin
-            DatString := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(InParamValues[I]),
+            Params[I].AsString := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(InParamValues[I]),
               ConSettings^.WriteFormatSettings, False);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, ord(tdsChar),
-              MaxInt, ConSettings^.WriteFormatSettings.DateFormatLen, Pointer(DatString));
+              -1, ConSettings^.WriteFormatSettings.DateFormatLen, Pointer(Params[I].AsString));
           end;
         stTime:
           begin
-            DatString := DateTimeToRawSQLTime(ClientVarManager.GetAsDateTime(InParamValues[I]),
+            Params[I].AsString := DateTimeToRawSQLTime(ClientVarManager.GetAsDateTime(InParamValues[I]),
               ConSettings^.WriteFormatSettings, False);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, ord(tdsChar),
-              MaxInt, ConSettings^.WriteFormatSettings.TimeFormatLen, Pointer(DatString));
+              -1, ConSettings^.WriteFormatSettings.TimeFormatLen, Pointer(Params[I].AsString));
           end;
         stTimeStamp:
           begin
-            DatString := DateTimeToRawSQLTimeStamp(ClientVarManager.GetAsDateTime(InParamValues[I]),
+            Params[I].AsString := DateTimeToRawSQLTimeStamp(ClientVarManager.GetAsDateTime(InParamValues[I]),
               ConSettings^.WriteFormatSettings, False);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, ord(tdsChar),
-              MaxInt, ConSettings^.WriteFormatSettings.DateTimeFormatLen, Pointer(DatString));
+              -1, ConSettings^.WriteFormatSettings.DateTimeFormatLen, Pointer(Params[I].AsString));
           end;
         stAsciiStream, stUnicodeStream, stBinaryStream:
           begin
-            TempBlob := SoftVarManager.GetAsInterface(InParamValues[I]) as IZBlob;
+            Params[I].TempBlob := SoftVarManager.GetAsInterface(InParamValues[I]) as IZBlob;
             if ParamType = stBinaryStream then
               FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsImage),
-                MaxInt, Max(1, TempBlob.Length), TempBlob.GetBuffer)
+                -1, Max(1, Params[I].TempBlob.Length), Params[I].TempBlob.GetBuffer)
             else
               if IsNCharIndex[i] then
               begin
-                if TempBlob.IsClob then
+                if Params[I].TempBlob.IsClob then
                 begin
-                  CharRec.P := TempBlob.GetPAnsiChar(zCP_UTF8);
-                  CharRec.Len := Max(1, TempBlob.Length);
+                  Params[I].CharRec.P := Params[I].TempBlob.GetPAnsiChar(zCP_UTF8);
+                  Params[I].CharRec.Len := Max(1, Params[I].TempBlob.Length);
                 end
                 else
                 begin
-                  DatString := GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer, TempBlob.Length, ConSettings, zCP_UTF8);
-                  if Pointer(DatString) = nil then
+                  Params[I].AsString := GetValidatedAnsiStringFromBuffer(Params[I].TempBlob.GetBuffer, Params[I].TempBlob.Length, ConSettings, zCP_UTF8);
+                  if Pointer(Params[I].AsString) = nil then
                   begin
-                    CharRec.P := PEmptyAnsiString;
-                    CharRec.Len := 1;
+                    Params[I].CharRec.P := PEmptyAnsiString;
+                    Params[I].CharRec.Len := 1;
                   end
                   else
                   begin
-                    CharRec.P := Pointer(DatString);
-                    CharRec.Len := {%H-}PLengthInt(NativeUInt(DatString) - StringLenOffSet)^;
+                    Params[I].CharRec.P := Pointer(Params[I].AsString);
+                    Params[I].CharRec.Len := {%H-}PLengthInt(NativeUInt(Params[I].AsString) - StringLenOffSet)^;
                   end;
                 end;
                 FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsText),
-                    MaxInt, CharRec.Len, CharRec.P)
+                    -1, Params[I].CharRec.Len, Params[I].CharRec.P)
               end
               else
               begin
-                if TempBlob.IsClob then
+                if Params[I].TempBlob.IsClob then
                 begin
-                  CharRec.P := TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP);
-                  CharRec.Len := Max(1, TempBlob.Length);
+                  Params[I].CharRec.P := Params[I].TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP);
+                  Params[I].CharRec.Len := Max(1, Params[I].TempBlob.Length);
                 end
                 else
                 begin
-                  DatString := GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                    TempBlob.Length, ConSettings);
-                  if Pointer(DatString) = nil then
+                  Params[I].AsString := GetValidatedAnsiStringFromBuffer(Params[I].TempBlob.GetBuffer,
+                    Params[I].TempBlob.Length, ConSettings);
+                  if Pointer(Params[I].AsString) = nil then
                   begin
-                    CharRec.P := PEmptyAnsiString;
-                    CharRec.Len := 1;
+                    Params[I].CharRec.P := PEmptyAnsiString;
+                    Params[I].CharRec.Len := 1;
                   end
                   else
                   begin
-                    CharRec.P := Pointer(DatString);
-                    CharRec.Len := {%H-}PLengthInt(NativeUInt(DatString) - StringLenOffSet)^;;
+                    Params[I].CharRec.P := Pointer(Params[I].AsString);
+                    Params[I].CharRec.Len := {%H-}PLengthInt(NativeUInt(Params[I].AsString) - StringLenOffSet)^;;
                   end;
                 end;
                 FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsText),
-                    MaxInt, CharRec.Len, CharRec.P)
+                    -1, Params[I].CharRec.Len, Params[I].CharRec.P)
               end;
           end;
         stBytes:
           begin
-            DatBytes := SoftVarManager.GetAsBytes(InParamValues[I]);
+            Params[I].AsBytes := SoftVarManager.GetAsBytes(InParamValues[I]);
             FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsBinary),
-              MaxInt, Length(DatBytes), Pointer(DatBytes));
+              -1, Length(Params[I].AsBytes), Pointer(Params[I].AsBytes));
           end;
       else
         FPlainDriver.dbRpcParam(FHandle, nil, 0, Ord(tdsChar), 0, 0, nil);
@@ -865,6 +903,7 @@ begin
 
   if FPLainDriver.dbRpcExec(FHandle) <> DBSUCCEED then
     FDBLibConnection.CheckDBLibError(lcOther, 'EXECUTEPREPARED:dbRPCExec');
+  SetLength(Params, 0);
   FetchResults;
   Result := GetMoreResults;
 
@@ -890,35 +929,39 @@ begin
         tdsNVarChar, tdsBigNChar, tdsBigNVarChar:
           begin
             ZSetString(FPLainDriver.dbRetData(FHandle, ParamIndex),
-              FPLainDriver.dbRetLen(FHandle, ParamIndex), DatString);
-            ClientVarManager.SetAsUTF8String(Temp, DatString);
+              FPLainDriver.dbRetLen(FHandle, ParamIndex), OutString);
+            ClientVarManager.SetAsUTF8String(Temp, OutString);
           end;
         tdsChar, tdsVarchar, tdsBigChar, tdsBigVarChar:
           begin
             P := FPLainDriver.dbRetData(FHandle, ParamIndex);
             Len := NativeUInt(FPLainDriver.dbRetLen(FHandle, ParamIndex));
-            case ZDetectUTF8Encoding(P, Len) of
-              etUTF8:
-                begin
-                  ZSetString(P, Len, DatString);
-                  ClientVarManager.SetAsUTF8String(Temp, DatString);
-                end;
-              etUSASCII:
-                begin
-                  ZSetString(P, Len, DatString);
-                  ClientVarManager.SetAsRawByteString(Temp, DatString);
-                end;
-              else
-                ClientVarManager.SetAsUnicodeString(Temp, USASCII7ToUnicodeString(P, Len));
-            end;
+            if ConSettings^.ClientCodePage^.IsStringFieldCPConsistent then begin
+              ZSetString(P, Len, OutString);
+              ClientVarManager.SetAsRawByteString(Temp, OutString);
+            end else
+              case ZDetectUTF8Encoding(P, Len) of
+                etUTF8:
+                  begin
+                    ZSetString(P, Len, OutString);
+                    ClientVarManager.SetAsUTF8String(Temp, OutString);
+                  end;
+                etUSASCII:
+                  begin
+                    ZSetString(P, Len, OutString);
+                    ClientVarManager.SetAsRawByteString(Temp, OutString);
+                  end;
+                else
+                  ClientVarManager.SetAsUnicodeString(Temp, PRawToUnicode(P, Len, ConSettings^.ClientCodePage^.CP));
+              end;
           end;
         tdsBinary, tdsVarBinary, tdsBigBinary, tdsBigVarBinary:
           begin
             DatLen := FPLainDriver.dbRetLen(FHandle, ParamIndex);
-            SetLength(DatBytes, DatLen);
-            Move(FPLainDriver.dbRetData(FHandle, ParamIndex)^,
-              Pointer(DatBytes)^, DatLen);
-            SoftVarManager.SetAsBytes(Temp, DatBytes);
+            SetLength(OutBytes, DatLen);
+            {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(FPLainDriver.dbRetData(FHandle, ParamIndex)^,
+              Pointer(OutBytes)^, DatLen);
+            SoftVarManager.SetAsBytes(Temp, OutBytes);
           end;
         tdsInt1:
           SoftVarManager.SetAsInteger(Temp,
@@ -946,23 +989,23 @@ begin
             FPlainDriver.dbConvert(FHandle, RetType,
               FPlainDriver.dbRetData(FHandle, ParamIndex),
                 FPLainDriver.dbRetLen(FHandle, ParamIndex), Ord(tdsFlt8),
-              @DatDouble, 8);
-            SoftVarManager.SetAsFloat(Temp, DatDouble);
+              @OutDouble, 8);
+            SoftVarManager.SetAsFloat(Temp, OutDouble);
           end;
         tdsDateTime4, tdsDateTimeN:
           begin
             FPLainDriver.dbConvert(FHandle, RetType,
               FPLainDriver.dbRetData(FHandle, ParamIndex), 4,
-              RetType, @DatDBDATETIME, 8);
+              RetType, @OutDBDATETIME, 8);
             SoftVarManager.SetAsDateTime(Temp,
-              DatDBDATETIME.dtdays + 2 + (DatDBDATETIME.dttime / 25920000));
+              OutDBDATETIME.dtdays + 2 + (OutDBDATETIME.dttime / 25920000));
           end;
         tdsDateTime:
           begin
-            DatDBDATETIME := PDBDATETIME(
+            OutDBDATETIME := PDBDATETIME(
               FPLainDriver.dbRetData(FHandle, ParamIndex))^;
             SoftVarManager.SetAsDateTime(Temp,
-              DatDBDATETIME.dtdays + 2 + (DatDBDATETIME.dttime / 25920000));
+              OutDBDATETIME.dtdays + 2 + (OutDBDATETIME.dttime / 25920000));
           end;
         tdsImage:
           Temp := EncodeInterface(TZAbstractBlob.CreateWithData(

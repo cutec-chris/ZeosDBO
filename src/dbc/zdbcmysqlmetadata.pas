@@ -58,7 +58,8 @@ interface
 
 uses
   Types, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
-  ZClasses, ZSysUtils, ZDbcIntfs, ZDbcMetadata, ZCompatibility;
+  {%H-}ZClasses, ZSysUtils, ZDbcIntfs, ZDbcMetadata, ZCompatibility,
+  ZURL, ZDbcConnection;
 
 type
 
@@ -206,6 +207,8 @@ type
 
   {** Implements MySQL Database Metadata. }
   TZMySQLDatabaseMetadata = class(TZAbstractDatabaseMetadata)
+  private
+    FInfo: TStrings;
   protected
     function CreateDatabaseInfo: IZDatabaseInfo; override; // technobot 2008-06-26
 
@@ -249,6 +252,7 @@ type
       TableNamePattern, ColumnNamePattern: string): IZResultSet; override; //EgonHugeist
     function UncachedGetCharacterSets: IZResultSet; override; //EgonHugeist
   public
+    constructor Create(Connection: TZAbstractConnection; const Url: TZURL); override;
     destructor Destroy; override;
   end;
 
@@ -256,7 +260,7 @@ implementation
 
 uses
   Math,
-  ZFastCode, ZMessages, ZDbcMySqlUtils;
+  ZFastCode, ZMessages, ZDbcMySqlUtils, ZDbcUtils, ZDbcMySql, ZDbcProperties;
 
 { TZMySQLDatabaseInfo }
 
@@ -865,10 +869,10 @@ var
 begin
   DecodeSqlVersioning(Metadata.GetConnection.GetHostVersion,
     MajorVersion,MinorVersion, Subversion);
-  if (Majorversion < 4) or ((majorversion=4) and (Minorversion = 0)) then
+  if (Majorversion < 4) or ((MajorVersion=4) and (MinorVersion = 0)) then
    with Metadata.GetConnection.CreateStatement.ExecuteQuery('SELECT VERSION()') do
     begin
-      VersionList := SplitString(String(GetString(1)), '.-');
+      VersionList := SplitString(String(GetString(FirstDbcIndex)), '.-');
       try
         if VersionList.Count >= 2 then
         begin
@@ -884,11 +888,20 @@ end;
 
 { TZMySQLDatabaseMetadata }
 
+constructor TZMySQLDatabaseMetadata.Create(Connection: TZAbstractConnection;
+  const Url: TZURL);
+begin
+  inherited Create(Connection, Url);
+  FInfo := TStringList.Create;
+  FInfo.Values[DSProps_UseResult] := 'True';
+  FDatabase := (GetConnection as IZMySQLConnection).GetDatabaseName;
+end;
 {**
   Destroys this object and cleanups the memory.
 }
 destructor TZMySQLDatabaseMetadata.Destroy;
 begin
+  FreeAndNil(FInfo);
   inherited Destroy;
 end;
 
@@ -954,8 +967,6 @@ end;
 function TZMySQLDatabaseMetadata.UncachedGetTables(const Catalog: string;
   const SchemaPattern: string; const TableNamePattern: string;
   const Types: TStringDynArray): IZResultSet;
-const
-  TABLES_TABLE_NAME_Index = {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF};
 var
   Len: NativeUInt;
   LCatalog, LTableNamePattern: string;
@@ -965,7 +976,7 @@ begin
     GetCatalogAndNamePattern(Catalog, SchemaPattern, TableNamePattern,
       LCatalog, LTableNamePattern);
 
-    with GetConnection.CreateStatement.ExecuteQuery(
+    with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
       Format('SHOW TABLES FROM %s LIKE ''%s''',
       [IC.Quote(LCatalog), LTableNamePattern])) do
     begin
@@ -973,7 +984,7 @@ begin
       begin
         Result.MoveToInsertRow;
         Result.UpdateString(CatalogNameIndex, LCatalog);
-        Result.UpdatePAnsiChar(TableNameIndex, GetPAnsiChar(TABLES_TABLE_NAME_Index, Len), @Len);
+        Result.UpdatePAnsiChar(TableNameIndex, GetPAnsiChar(FirstDbcIndex, Len), @Len);
         Result.UpdateString(TableColumnsSQLType, 'TABLE');
         Result.InsertRow;
       end;
@@ -986,7 +997,7 @@ begin
       try
         EnterSilentMySQLError;
         try
-          if GetConnection.CreateStatement.ExecuteQuery(
+          if GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
             Format('SHOW COLUMNS FROM %s.%s',
             [IC.Quote(LCatalog),
              IC.Quote(LTableNamePattern)])).Next then
@@ -1025,7 +1036,7 @@ var
 begin
     Result:=inherited UncachedGetCatalogs;
 
-    with GetConnection.CreateStatement.ExecuteQuery('SHOW DATABASES') do
+    with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery('SHOW DATABASES') do
     begin
       while Next do
       begin
@@ -1120,8 +1131,8 @@ var
   MySQLType: TZSQLType;
   TempCatalog, TempColumnNamePattern, TempTableNamePattern: string;
 
-  TypeName, TypeInfoSecond: String;
-  Nullable, DefaultValue: String;
+  TypeName, TypeInfoSecond, DefaultValue: RawByteString;
+  Nullable: String;
   HasDefaultValue: Boolean;
   ColumnSize, ColumnDecimals: Integer;
   OrdPosition: Integer;
@@ -1154,7 +1165,7 @@ begin
         OrdPosition := 1;
         TempTableNamePattern := TableNameList.Strings[I];
 
-        with GetConnection.CreateStatement.ExecuteQuery(
+        with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
           Format('SHOW FULL COLUMNS FROM %s.%s LIKE ''%s''',
           [IC.Quote(TempCatalog),
           IC.Quote(TempTableNamePattern),
@@ -1175,13 +1186,13 @@ begin
             Result.UpdateString(TableNameIndex, TempTableNamePattern) ;
             Result.UpdatePAnsiChar(ColumnNameIndex, GetPAnsiChar(ColumnIndexes[1], Len), @Len);
 
-            ConvertMySQLColumnInfoFromString(GetString(ColumnIndexes[2]),
-              ConSettings, TypeName,
+            TypeName := GetRawByteString(ColumnIndexes[2]);
+            ConvertMySQLColumnInfoFromString(TypeName, ConSettings,
               TypeInfoSecond, MySQLType, ColumnSize, ColumnDecimals);
             Result.UpdateInt(TableColColumnTypeIndex, Ord(MySQLType));
-            Result.UpdateString(TableColColumnTypeNameIndex, TypeName);
+            Result.UpdateRawByteString(TableColColumnTypeNameIndex, TypeName);
             Result.UpdateInt(TableColColumnSizeIndex, ColumnSize);
-            Result.UpdateInt(TableColColumnBufLengthIndex, MAXBUF);
+
             Result.UpdateInt(TableColColumnDecimalDigitsIndex, ColumnDecimals);
             Result.UpdateNull(TableColColumnNumPrecRadixIndex);
 
@@ -1213,14 +1224,11 @@ begin
               // So we just ignore this, the field gets set to NULL if nothing was specified...
               HasDefaultValue := false;
               DefaultValue := '';
-            end
-            else
-            begin
-              DefaultValue := GetString(ColumnIndexes[5]);
+            end else begin
+              DefaultValue := GetRawByteString(ColumnIndexes[5]);
               if not (DefaultValue = '') then
                  HasDefaultValue := true
-              else
-              begin
+              else begin
                 // MySQL bizarity 2:
                 // For CHAR, BLOB, TEXT and SET types, '' either means: default value is '' or: no default value
                 // There's absolutely no way of telling when using SHOW COLUMNS FROM,
@@ -1229,16 +1237,14 @@ begin
                 // For ENUM types, '' means: default value is first value in enum set
                 // For other types, '' means: no default value
                 HasDefaultValue := false;
-                if ZFastCode.Pos('blob', TypeName) > 0 then HasDefaultValue := true;
-                if ZFastCode.Pos('text', TypeName) > 0 then HasDefaultValue := true;
-                if ZFastCode.Pos('char', TypeName) > 0 then HasDefaultValue := true;
+                if MySQLType in [stAsciiStream, stUnicodeStream, stBinaryStream] then HasDefaultValue := true;
+                if EndsWith(TypeName, RawByteString('char')) then HasDefaultValue := true;
                 if 'set' = TypeName then HasDefaultValue := true;
-                if 'enum' =  TypeName then
-                  begin
-                    HasDefaultValue := true;
-                    DefaultValue := Copy(TypeInfoSecond, 2,length(TypeInfoSecond)-1);
-                    DefaultValue := Copy(DefaultValue, 1, ZFastCode.Pos('''', DefaultValue) - 1);
-                  end;
+                if 'enum' = TypeName then begin
+                  HasDefaultValue := true;
+                  DefaultValue := Copy(TypeInfoSecond, 2,length(TypeInfoSecond)-1);
+                  DefaultValue := Copy(DefaultValue, 1, ZFastCode.Pos({$IFDEF UNICODE}RawByteString{$ENDIF}(''''), DefaultValue) - 1);
+                end;
               end;
             end;
             if HasDefaultValue then
@@ -1260,16 +1266,22 @@ begin
               end
               else if (MySQLType = stBoolean) and (TypeName = 'enum') then
               begin
-                if (DefaultValue = 'y') or (DefaultValue = 'Y') then
-                  DefaultValue := '1'
-                else
-                  DefaultValue := '0';
+                DefaultValue := BoolStrIntsRaw[ (DefaultValue = 'y') or (DefaultValue = 'Y') ];
               end;
+              Result.UpdateRawByteString(TableColColumnColDefIndex, DefaultValue);
             end;
-            Result.UpdateString(TableColColumnColDefIndex, DefaultValue);
+            if MySQLType = stString then begin
+              Result.UpdateInt(TableColColumnBufLengthIndex, ColumnSize * ConSettings^.ClientCodePage^.CharWidth +1);
+              Result.UpdateInt(TableColColumnCharOctetLengthIndex, ColumnSize * ConSettings^.ClientCodePage^.CharWidth);
+            end else if MySQLType = stUnicodeString then begin
+              Result.UpdateInt(TableColColumnBufLengthIndex, (ColumnSize+1) shl 1);
+              Result.UpdateInt(TableColColumnCharOctetLengthIndex, ColumnSize shl 1);
+            end else if MySQLType in [stBytes, stAsciiStream, stUnicodeStream, stBinaryStream] then
+              Result.UpdateInt(TableColColumnBufLengthIndex, ColumnSize)
+            else
+              Result.UpdateInt(TableColColumnBufLengthIndex, ZSQLTypeToBuffSize(MySQLType));
             //Result.UpdateNull(TableColColumnSQLDataTypeIndex);
             //Result.UpdateNull(TableColColumnSQLDateTimeSubIndex);
-            //Result.UpdateNull(TableColColumnCharOctetLengthIndex);
             Result.UpdateInt(TableColColumnOrdPosIndex, OrdPosition);
 
             Result.UpdateBoolean(TableColColumnAutoIncIndex, //AUTO_INCREMENT
@@ -1358,7 +1370,7 @@ begin
 
     PrivilegesList := TStringList.Create;
     try
-      with GetConnection.CreateStatement.ExecuteQuery(
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
         'SELECT c.host, c.db, t.grantor, c.user, c.table_name,'
         + ' c.column_name, c.column_priv FROM mysql.columns_priv c,'
         + ' mysql.tables_priv t WHERE c.host=t.host AND c.db=t.db'
@@ -1466,7 +1478,7 @@ begin
 
     PrivilegesList := TStringList.Create;
     try
-      with GetConnection.CreateStatement.ExecuteQuery(
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
         'SELECT host,db,table_name,grantor,user,table_priv'
         + ' from mysql.tables_priv WHERE 1=1'
         + SchemaCondition + TableNameCondition
@@ -1543,7 +1555,7 @@ begin
     GetCatalogAndNamePattern(Catalog, Schema, Table,
       LCatalog, LTable);
 
-    with GetConnection.CreateStatement.ExecuteQuery(
+    with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
       Format('SHOW KEYS FROM %s.%s',
       [IC.Quote(LCatalog),
       IC.Quote(LTable)])) do
@@ -1659,7 +1671,7 @@ begin
     KeyList := TStringList.Create;
     CommentList := TStringList.Create;
     try
-      with GetConnection.CreateStatement.ExecuteQuery(
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
         Format('SHOW TABLE STATUS FROM %s LIKE ''%s''',
         [IC.Quote(LCatalog), LTable])) do
       begin
@@ -1801,7 +1813,7 @@ begin
     KeyList := TStringList.Create;
     CommentList := TStringList.Create;
     try
-      with GetConnection.CreateStatement.ExecuteQuery(
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
         Format('SHOW TABLE STATUS FROM %s',
         [IC.Quote(LCatalog)])) do
       begin
@@ -1950,7 +1962,7 @@ begin
     KeyList := TStringList.Create;
     CommentList := TStringList.Create;
     try
-      with GetConnection.CreateStatement.ExecuteQuery(
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
         Format('SHOW TABLE STATUS FROM %s',
         [IC.Quote(LForeignCatalog)])) do
       begin
@@ -2194,7 +2206,7 @@ begin
     GetCatalogAndNamePattern(Catalog, Schema, Table,
       LCatalog, LTable);
 
-    with GetConnection.CreateStatement.ExecuteQuery(
+    with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
       Format('SHOW INDEX FROM %s.%s',
       [IC.Quote(LCatalog),
       IC.Quote(LTable)])) do
@@ -2212,10 +2224,7 @@ begin
         Result.UpdateString(CatalogNameIndex, LCatalog);
         //Result.UpdateNull(SchemaNameIndex);
         Result.UpdatePAnsiChar(TableNameIndex, GetPAnsiChar(ColumnIndexes[1], Len), @Len);
-        if GetInt(ColumnIndexes[2]) = 0 then
-          Result.UpdateString(IndexInfoColNonUniqueIndex, 'true')
-        else
-          Result.UpdateString(IndexInfoColNonUniqueIndex, 'false');
+        Result.UpdateString(IndexInfoColNonUniqueIndex, LowerCase(BoolStrs[GetInt(ColumnIndexes[2]) = 0]));
         //Result.UpdateNull(IndexInfoColIndexQualifierIndex);
         Result.UpdatePAnsiChar(IndexInfoColIndexNameIndex, GetPAnsiChar(ColumnIndexes[3], Len), @Len);
         Result.UpdateByte(IndexInfoColTypeIndex, Ord(tiOther));
@@ -2363,7 +2372,8 @@ const
   RETURN_VALUES_Index = {$IFDEF GENERIC_INDEX}6{$ELSE}7{$ENDIF};
 var
   Len: NativeUInt;
-  SQL, TypeName, Temp: string;
+  SQL: String;
+  TypeName, Temp: RawByteString;
   ParamList, Params, Names, Returns: TStrings;
   I, ColumnSize, Precision: Integer;
   FieldType: TZSQLType;
@@ -2390,7 +2400,7 @@ var
   function DecomposeParamFromList(AList: TStrings): String;
   var
     J, I, N: Integer;
-    Temp: String;
+    Temp, TypeName: String;
     procedure AddTempString(Const Value: String);
     begin
       if Temp = '' then
@@ -2461,7 +2471,7 @@ begin
     ' ORDER BY p.db, p.name';
 
     try
-      with GetConnection.CreateStatement.ExecuteQuery(SQL) do
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(SQL) do
       begin
         ParamList := TStringList.Create;
         Params := TStringList.Create;
@@ -2499,9 +2509,8 @@ begin
             Result.UpdatePAnsiChar(CatalogNameIndex, GetPAnsiChar(PROCEDURE_SCHEM_index, Len), @Len); //PROCEDURE_CAT
             //Result.UpdateNull(SchemaNameIndex); //PROCEDURE_SCHEM
             Result.UpdatePAnsiChar(ProcColProcedureNameIndex, GetPAnsiChar(PROCEDURE_NAME_Index, Len), @Len); //PROCEDURE_NAME
-            ConvertMySQLColumnInfoFromString(Params[2],
-              ConSettings, TypeName, Temp,
-              FieldType, ColumnSize, Precision);
+            TypeName := ConSettings^.ConvFuncs.ZStringToRaw(Params[2], ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP);
+            ConvertMySQLColumnInfoFromString(TypeName, ConSettings, Temp, FieldType, ColumnSize, Precision);
             { process COLUMN_NAME }
             if Params[1] = '' then
               if Params[0] = 'RETURNS' then
@@ -2509,10 +2518,7 @@ begin
               else
                 Result.UpdateString(ProcColColumnNameIndex, GetNextName('$', True))
             else
-              if IC.IsQuoted(Params[1]) then
-                Result.UpdateString(ProcColColumnNameIndex, GetNextName(Copy(Params[1], 2, Length(Params[1])-2), (Length(Params[1])=2)))
-              else
-                Result.UpdateString(ProcColColumnNameIndex, GetNextName(Params[1]));
+              Result.UpdateString(ProcColColumnNameIndex, GetNextName(DecomposeObjectString(Params[1])));
             { COLUMN_TYPE }
             if UpperCase(Params[0]) = 'OUT' then
               Result.UpdateByte(ProcColColumnTypeIndex, Ord(pctOut))
@@ -2531,7 +2537,7 @@ begin
             { DATA_TYPE }
             Result.UpdateByte(ProcColDataTypeIndex, Ord(FieldType));
             { TYPE_NAME }
-            Result.UpdateString(ProcColTypeNameIndex, TypeName);
+            Result.UpdateRawByteString(ProcColTypeNameIndex, TypeName);
             { PRECISION }
             Result.UpdateInt(ProcColPrecisionIndex, ColumnSize);
             { LENGTH }
@@ -2590,14 +2596,14 @@ begin
     Result:=inherited UncachedGetVersionColumns(Catalog, Schema, Table);
 
     Result.MoveToInsertRow;
-    Result.UpdateNull(1);
-    Result.UpdateString(2, 'ctid');
-  //  Result.UpdateInt(3, GetSQLType('tid')); //FIX IT
-    Result.UpdateString(4, 'tid');
-    Result.UpdateNull(5);
-    Result.UpdateNull(6);
-    Result.UpdateNull(7);
-    Result.UpdateInt(4, Ord(vcPseudo));
+    Result.UpdateNull(FirstDbcIndex);
+    Result.UpdateString(FirstDbcIndex + 1, 'ctid');
+  //  Result.UpdateInt(FirstDbcIndex + 2, GetSQLType('tid')); //FIX IT
+    Result.UpdateString(FirstDbcIndex + 3, 'tid');
+    Result.UpdateNull(FirstDbcIndex + 4);
+    Result.UpdateNull(FirstDbcIndex + 5);
+    Result.UpdateNull(FirstDbcIndex + 6);
+    Result.UpdateInt(FirstDbcIndex + 7, Ord(vcPseudo));
     Result.InsertRow;
 end;
 
@@ -2660,7 +2666,7 @@ begin
           'LEFT JOIN INFORMATION_SCHEMA.CHARACTER_SETS CS '+
           'ON CS.DEFAULT_COLLATE_NAME = CLMS.COLLATION_NAME '+
           'WHERE 1=1'+ SchemaCondition + TableNameCondition + ColumnNameCondition;
-        with GetConnection.CreateStatement.ExecuteQuery(SQL) do
+        with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(SQL) do
         begin
           if Next then
           begin
@@ -2684,7 +2690,7 @@ begin
           'INFORMATION_SCHEMA.CHARACTER_SETS CS ON '+
           'TBLS.TABLE_COLLATION = CS.DEFAULT_COLLATE_NAME '+
           'WHERE 1=1'+ SchemaCondition + TableNameCondition;
-        with GetConnection.CreateStatement.ExecuteQuery(SQL) do
+        with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(SQL) do
         begin
           if Next then
           begin
@@ -2709,7 +2715,7 @@ begin
         'LEFT JOIN INFORMATION_SCHEMA.CHARACTER_SETS CS '+
         'ON CS.DEFAULT_COLLATE_NAME = S.DEFAULT_COLLATION_NAME '+
         'WHERE 1=1 '+ SchemaCondition;
-      with GetConnection.CreateStatement.ExecuteQuery(SQL) do
+      with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(SQL) do
       begin
         if Next then
         begin
@@ -2737,7 +2743,7 @@ var Len: NativeUInt;
 begin
   Result:=inherited UncachedGetCharacterSets;
 
-  with GetConnection.CreateStatement.ExecuteQuery(
+  with GetConnection.CreateStatementWithParams(FInfo).ExecuteQuery(
     'SELECT CHARACTER_SET_NAME '+
     'FROM INFORMATION_SCHEMA.CHARACTER_SETS') do
   begin
@@ -2750,8 +2756,6 @@ begin
     Close;
   end;
 end;
-
-
 
 end.
 

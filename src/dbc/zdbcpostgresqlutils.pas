@@ -74,8 +74,8 @@ function IsNumber(Value: TZSQLType): Boolean;
    @param The TypeName is PostgreSQL type name
    @return The ZSQLType type
 }
-function PostgreSQLToSQLType(Connection: IZPostgreSQLConnection;
-  TypeName: string): TZSQLType; overload;
+function PostgreSQLToSQLType(const Connection: IZPostgreSQLConnection;
+  const TypeName: string): TZSQLType; overload;
 
 {**
     Another version of PostgreSQLToSQLType()
@@ -104,7 +104,7 @@ function SQLTypeToPostgreSQL(SQLType: TZSQLType; IsOidAsBlob: Boolean): string;
   @param Value a binary stream.
   @return a string in PostgreSQL binary string escape format.
 }
-function EncodeBinaryString(const Value: AnsiString): AnsiString;
+function EncodeBinaryString(SrcBuffer: PAnsiChar; Len: Integer; Quoted: Boolean = False): RawByteString;
 
 {**
   Encode string which probably consists of multi-byte characters.
@@ -113,8 +113,8 @@ function EncodeBinaryString(const Value: AnsiString): AnsiString;
   @param Value the regular string.
   @return the encoded string.
 }
-function PGEscapeString({%H-}Handle: Pointer; const Value: RawByteString;
-    ConSettings: PZConSettings; {%H-}WasEncoded: Boolean = False): RawByteString;
+function PGEscapeString(SrcBuffer: PAnsiChar; SrcLength: Integer;
+    ConSettings: PZConSettings; Quoted: Boolean): RawByteString;
 
 {**
   Converts an string from escape PostgreSQL format.
@@ -150,10 +150,9 @@ function GetMinorVersion(const Value: string): Word;
   @param ParameterIndex the first parameter is 1, the second is 2, ...
   @return a string representation of the parameter.
 }
-function PGPrepareAnsiSQLParam(Value: TZVariant; ClientVarManager: IZClientVariantManager;
-  Connection: IZPostgreSQLConnection;
-  PlainDriver: IZPostgreSQLPlainDriver; const ChunkSize: Cardinal;
-  const InParamType: TZSQLType; const oidasblob, DateTimePrefix, QuotedNumbers: Boolean;
+function PGPrepareAnsiSQLParam(const Value: TZVariant; const ClientVarManager: IZClientVariantManager;
+  const Connection: IZPostgreSQLConnection; const ChunkSize: Cardinal; const InParamType: TZSQLType;
+  const oidasblob, DateTimePrefix, QuotedNumbers: Boolean;
   ConSettings: PZConSettings): RawByteString;
 
 implementation
@@ -166,71 +165,75 @@ uses ZFastCode, ZMessages, ZDbcPostgreSqlResultSet, ZDbcUtils, ZSysUtils;
    @param The TypeName is PostgreSQL type name
    @return The ZSQLType type
 }
-function PostgreSQLToSQLType(Connection: IZPostgreSQLConnection;
-  TypeName: string): TZSQLType;
+function PostgreSQLToSQLType(const Connection: IZPostgreSQLConnection;
+  const TypeName: string): TZSQLType;
+var
+  TypeNameLo: string;
 begin
-  TypeName := LowerCase(TypeName);
-  if (TypeName = 'interval') or (TypeName = 'char') or (TypeName = 'bpchar')
-    or (TypeName = 'varchar') or (TypeName = 'bit') or (TypeName = 'varbit')
+  TypeNameLo := LowerCase(TypeName);
+  if (TypeNameLo = 'interval') or (TypeNameLo = 'char') or (TypeNameLo = 'bpchar')
+    or (TypeNameLo = 'varchar') or (TypeNameLo = 'bit') or (TypeNameLo = 'varbit')
   then//EgonHugeist: Highest Priority Client_Character_set!!!!
     if (Connection.GetConSettings.CPType = cCP_UTF16) then
       Result := stUnicodeString
     else
       Result := stString
-  else if TypeName = 'text' then
+  else if TypeNameLo = 'text' then
     Result := stAsciiStream
-  else if TypeName = 'oid' then
+  else if TypeNameLo = 'oid' then
   begin
     if Connection.IsOidAsBlob() then
       Result := stBinaryStream
     else
       Result := stInteger;
   end
-  else if TypeName = 'name' then
+  else if TypeNameLo = 'name' then
     Result := stString
-  else if TypeName = 'enum' then
+  else if TypeNameLo = 'enum' then
     Result := stString
-  else if TypeName = 'cidr' then
+  else if TypeNameLo = 'cidr' then
     Result := stString
-  else if TypeName = 'inet' then
+  else if TypeNameLo = 'inet' then
     Result := stString
-  else if TypeName = 'macaddr' then
+  else if TypeNameLo = 'macaddr' then
     Result := stString
-  else if TypeName = 'int2' then
+  else if TypeNameLo = 'int2' then
     Result := stSmall
-  else if TypeName = 'int4' then
+  else if TypeNameLo = 'int4' then
     Result := stInteger
-  else if TypeName = 'int8' then
+  else if TypeNameLo = 'int8' then
     Result := stLong
-  else if TypeName = 'float4' then
+  else if TypeNameLo = 'float4' then
     Result := stFloat
-  else if (TypeName = 'float8') or (TypeName = 'decimal')
-    or (TypeName = 'numeric') then
+  else if (TypeNameLo = 'float8') or (TypeNameLo = 'decimal')
+    or (TypeNameLo = 'numeric') then
     Result := stDouble
-  else if TypeName = 'money' then
+  else if TypeNameLo = 'money' then
     Result := stCurrency
-  else if TypeName = 'bool' then
+  else if TypeNameLo = 'bool' then
     Result := stBoolean
-  else if TypeName = 'date' then
+  else if TypeNameLo = 'date' then
     Result := stDate
-  else if TypeName = 'time' then
+  else if TypeNameLo = 'time' then
     Result := stTime
-  else if (TypeName = 'datetime') or (TypeName = 'timestamp')
-    or (TypeName = 'timestamptz') or (TypeName = 'abstime') then
+  else if (TypeNameLo = 'datetime') or (TypeNameLo = 'timestamp')
+    or (TypeNameLo = 'timestamptz') or (TypeNameLo = 'abstime') then
     Result := stTimestamp
-  else if TypeName = 'regproc' then
+  else if TypeNameLo = 'regproc' then
     Result := stString
-  else if TypeName = 'bytea' then
+  else if TypeNameLo = 'bytea' then
   begin
     if Connection.IsOidAsBlob then
       Result := stBytes
     else
       Result := stBinaryStream;
   end
-  else if (TypeName = 'int2vector') or (TypeName = 'oidvector') then
+  else if (TypeNameLo = 'int2vector') or (TypeNameLo = 'oidvector') then
     Result := stAsciiStream
-  else if (TypeName <> '') and (TypeName[1] = '_') then // ARRAY TYPES
+  else if (TypeNameLo <> '') and (TypeNameLo[1] = '_') then // ARRAY TYPES
     Result := stAsciiStream
+  else if (TypeNameLo = 'uuid') then
+    Result := stGuid
   else
     Result := stUnknown;
 
@@ -288,6 +291,7 @@ begin
         else
           Result := stBinaryStream;
       end;
+    2950: Result := stGUID;
     22,30: Result := stAsciiStream; { int2vector/oidvector. no '_aclitem' }
     143,629,651,719,791,1000..1028,1040,1041,1115,1182,1183,1185,1187,1231,1263,
     1270,1561,1563,2201,2207..2211,2949,2951,3643,3644,3645,3735,3770 : { other array types }
@@ -311,6 +315,7 @@ begin
     stDate: Result := 'date';
     stTime: Result := 'time';
     stTimestamp: Result := 'timestamp';
+    stGuid: Result := 'uuid';
     stBinaryStream, stBytes:
       if IsOidAsBlob then
         Result := 'oid'
@@ -339,12 +344,12 @@ end;
   @param Value the regular string.
   @return the encoded string.
 }
-function PGEscapeString(Handle: Pointer; const Value: RawByteString;
-    ConSettings: PZConSettings; WasEncoded: Boolean = False): RawByteString;
+function PGEscapeString(SrcBuffer: PAnsiChar; SrcLength: Integer;
+    ConSettings: PZConSettings; Quoted: Boolean): RawByteString;
 var
   I, LastState: Integer;
-  SrcLength, DestLength: Integer;
-  SrcBuffer, DestBuffer: PAnsiChar;
+  DestLength: Integer;
+  DestBuffer: PAnsiChar;
 
   function pg_CS_stat(stat: integer; character: integer;
           CharactersetCode: TZPgCharactersetType): integer;
@@ -486,26 +491,27 @@ var
   end;
 
 begin
-  SrcLength := Length(Value);
-  SrcBuffer := PAnsiChar(Value);
-  DestLength := 2;
+  DestBuffer := SrcBuffer; //safe entry
+  DestLength := Ord(Quoted) shl 1;
   LastState := 0;
   for I := 1 to SrcLength do
   begin
     LastState := pg_CS_stat(LastState,integer(SrcBuffer^),
       TZPgCharactersetType(ConSettings.ClientCodePage.ID));
-    if CharInSet(SrcBuffer^, [#0, '''']) or ((SrcBuffer^ = '\') and (LastState = 0)) then
+    if (SrcBuffer^ in [#0, '''']) or ((SrcBuffer^ = '\') and (LastState = 0)) then
       Inc(DestLength, 4)
     else
       Inc(DestLength);
     Inc(SrcBuffer);
   end;
 
-  SrcBuffer := PAnsiChar(Value);
+  SrcBuffer := DestBuffer; //restore entry
   SetLength(Result, DestLength);
-  DestBuffer := PAnsiChar(Result);
-  DestBuffer^ := '''';
-  Inc(DestBuffer);
+  DestBuffer := Pointer(Result);
+  if Quoted then begin
+    DestBuffer^ := '''';
+    Inc(DestBuffer);
+  end;
 
   LastState := 0;
   for I := 1 to SrcLength do
@@ -527,7 +533,8 @@ begin
     end;
     Inc(SrcBuffer);
   end;
-  DestBuffer^ := '''';
+  if Quoted then
+    DestBuffer^ := '''';
 end;
 
 
@@ -540,35 +547,35 @@ end;
   @param Value a binary stream.
   @return a string in PostgreSQL binary string escape format.
 }
-function EncodeBinaryString(const Value: AnsiString): AnsiString;
+function EncodeBinaryString(SrcBuffer: PAnsiChar; Len: Integer; Quoted: Boolean = False): RawByteString;
 var
   I: Integer;
-  SrcLength, DestLength: Integer;
-  SrcBuffer, DestBuffer: PAnsiChar;
+  DestLength: Integer;
+  DestBuffer: PAnsiChar;
 begin
-  SrcLength := Length(Value);
-  SrcBuffer := PAnsiChar(Value);
-  DestLength := 2;
-  for I := 1 to SrcLength do
+  DestBuffer := SrcBuffer; //save entry
+  DestLength := Ord(Quoted) shl 1;
+  for I := 1 to Len do
   begin
     if (Byte(SrcBuffer^) < 32) or (Byte(SrcBuffer^) > 126)
-    or CharInSet(SrcBuffer^, ['''', '\']) then
+    or (SrcBuffer^ in ['''', '\']) then
       Inc(DestLength, 5)
     else
       Inc(DestLength);
     Inc(SrcBuffer);
   end;
+  SrcBuffer := DestBuffer; //restore
 
-  SrcBuffer := PAnsiChar(Value);
   SetLength(Result, DestLength);
-  DestBuffer := PAnsiChar(Result);
-  DestBuffer^ := '''';
-  Inc(DestBuffer);
+  DestBuffer := Pointer(Result);
+  if Quoted then begin
+    DestBuffer^ := '''';
+    Inc(DestBuffer);
+  end;
 
-  for I := 1 to SrcLength do
+  for I := 1 to Len do
   begin
-    if (Byte(SrcBuffer^) < 32) or (Byte(SrcBuffer^) > 126)
-    or CharInSet(SrcBuffer^, ['''', '\']) then
+    if (Byte(SrcBuffer^) < 32) or (Byte(SrcBuffer^) > 126) or (SrcBuffer^ in ['''', '\']) then
     begin
       DestBuffer[0] := '\';
       DestBuffer[1] := '\';
@@ -584,7 +591,8 @@ begin
     end;
     Inc(SrcBuffer);
   end;
-  DestBuffer^ := '''';
+  if Quoted then
+    DestBuffer^ := '''';
 end;
 
 {**
@@ -654,7 +662,7 @@ var
 //FirmOS
    ConnectionLost: boolean;
 
-   function GetMessage(AMessage: RawByteString): String;
+   function GetMessage(const AMessage: RawByteString): String;
    begin
     if Assigned(Connection) then
       Result := Trim(Connection.GetConSettings^.ConvFuncs.ZRawToString(AMessage,
@@ -689,7 +697,6 @@ begin
     ConnectionLost := (PlainDriver.GetStatus(Handle) = CONNECTION_BAD);
 
     if Assigned(Connection) then begin
-      if Connection.GetAutoCommit and not ConnectionLost then Connection.Rollback;
       DriverManager.LogError(LogCategory, Connection.GetConSettings^.Protocol, LogMessage,
         0, ErrorMessage);
     end else begin
@@ -697,7 +704,7 @@ begin
         0, ErrorMessage);
     end;
 
-    if ResultHandle <> nil then PlainDriver.Clear(ResultHandle);
+    if ResultHandle <> nil then PlainDriver.PQclear(ResultHandle);
 
     if not ( ConnectionLost and ( LogCategory = lcUnprepStmt ) ) then
       if not (Result = '42P18') then
@@ -729,13 +736,15 @@ end;
   @param ParameterIndex the first parameter is 1, the second is 2, ...
   @return a string representation of the parameter.
 }
-function PGPrepareAnsiSQLParam(Value: TZVariant; ClientVarManager: IZClientVariantManager;
-  Connection: IZPostgreSQLConnection; PlainDriver: IZPostgreSQLPlainDriver;
-  const ChunkSize: Cardinal; const InParamType: TZSQLType; const oidasblob,
-  DateTimePrefix, QuotedNumbers: Boolean; ConSettings: PZConSettings): RawByteString;
+function PGPrepareAnsiSQLParam(const Value: TZVariant; const ClientVarManager: IZClientVariantManager;
+  const Connection: IZPostgreSQLConnection; const ChunkSize: Cardinal;
+  const InParamType: TZSQLType; const oidasblob, DateTimePrefix, QuotedNumbers: Boolean;
+  ConSettings: PZConSettings): RawByteString;
 var
   TempBlob: IZBlob;
   WriteTempBlob: IZPostgreSQLOidBlob;
+  CharRec: TZCharRec;
+  aValue: TZVariant;
 begin
   if ClientVarManager.IsNull(Value)  then
     Result := 'NULL'
@@ -743,10 +752,7 @@ begin
   begin
     case InParamType of
       stBoolean:
-        if SoftVarManager.GetAsBoolean(Value) then
-          Result := 'TRUE'
-        else
-          Result := 'FALSE';
+        Result := BoolStrsUpRaw[SoftVarManager.GetAsBoolean(Value)];
       stByte, stShort, stWord, stSmall, stLongWord, stInteger, stUlong, stLong,
       stFloat, stDouble, stCurrency, stBigDecimal:
         begin
@@ -754,14 +760,12 @@ begin
           if QuotedNumbers then Result := #39+Result+#39;
         end;
       stBytes:
-        Result := Connection.EncodeBinary(SoftVarManager.GetAsBytes(Value));
-      stString, stUnicodeString:
-        if PlainDriver.SupportsStringEscaping(Connection.ClientSettingsChanged) then
-          Result :=  PlainDriver.EscapeString(Connection.GetConnectionHandle,
-            ClientVarManager.GetAsRawByteString(Value), ConSettings, True)
-        else
-          Result := ZDbcPostgreSqlUtils.PGEscapeString(Connection.GetConnectionHandle,
-            ClientVarManager.GetAsRawByteString(Value), ConSettings, True);
+        Result := Connection.EncodeBinary(SoftVarManager.GetAsBytes(Value), True);
+      stString, stUnicodeString: begin
+          aValue := Value;
+          CharRec := ClientVarManager.GetAsCharRec(aValue, ConSettings.ClientCodePage^.CP);
+          Result := Connection.EscapeString(CharRec.P, CharRec.Len, True);
+        end;
       stDate:
         if DateTimePrefix then
           Result := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(Value),
@@ -793,7 +797,7 @@ begin
                 if (Connection.IsOidAsBlob) or oidasblob then
                 begin
                   try
-                    WriteTempBlob := TZPostgreSQLOidBlob.Create(PlainDriver, nil, 0,
+                    WriteTempBlob := TZPostgreSQLOidBlob.Create(Connection.GetPlainDriver, nil, 0,
                       Connection.GetConnectionHandle, 0, ChunkSize);
                     WriteTempBlob.WriteBuffer(TempBlob.GetBuffer, TempBlob.Length);
                     Result := IntToRaw(WriteTempBlob.GetBlobOid);
@@ -802,36 +806,22 @@ begin
                   end;
                 end
                 else
-                  Result := Connection.EncodeBinary(TempBlob.GetString);
+                  Result := Connection.EncodeBinary(TempBlob.GetBuffer, TempBlob.Length, True);
               stAsciiStream, stUnicodeStream:
-                if TempBlob.IsClob then
-                  if PlainDriver.SupportsStringEscaping(Connection.ClientSettingsChanged) then
-                    Result := PlainDriver.EscapeString(
-                      Connection.GetConnectionHandle, TempBlob.GetRawByteString,
-                        ConSettings, True)
-                  else
-                    Result := ZDbcPostgreSqlUtils.PGEscapeString(
-                      Connection.GetConnectionHandle, TempBlob.GetRawByteString,
-                        ConSettings, True)
-                else
-                  if PlainDriver.SupportsStringEscaping(Connection.ClientSettingsChanged) then
-                    Result := PlainDriver.EscapeString(
-                      Connection.GetConnectionHandle,
-                      GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                        TempBlob.Length, ConSettings),
-                        ConSettings, True)
-                  else
-                    Result := ZDbcPostgreSqlUtils.PGEscapeString(
-                      Connection.GetConnectionHandle,
-                      GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                        TempBlob.Length, ConSettings),
-                        ConSettings, True);
+                if TempBlob.IsClob then begin
+                  CharRec.P := TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP);
+                  Result := Connection.EscapeString(CharRec.P, TempBlob.Length, True)
+                end else
+                  Result := Connection.EscapeString(GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
+                    TempBlob.Length, ConSettings));
             end; {case..}
           end
           else
             Result := 'NULL';
           TempBlob := nil;
         end; {if not TempBlob.IsEmpty then}
+      else
+        RaiseUnsupportedParameterTypeException(InParamType);	  
     end;
   end;
 end;

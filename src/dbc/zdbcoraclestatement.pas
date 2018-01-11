@@ -55,6 +55,10 @@ interface
 
 {$I ZDbc.inc}
 
+{$IFOPT R+}
+  {$DEFINE RangeCheck}
+{$ENDIF}
+
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, Types,
   {$IFDEF MSWINDOWS}{%H-}Windows,{$ENDIF}
@@ -87,10 +91,10 @@ type
     procedure BindInParameters; override;
     procedure UnPrepareInParameters; override;
   public
-    constructor Create(PlainDriver: IZOraclePlainDriver;
-      Connection: IZConnection; const SQL: string; Info: TStrings); overload;
-    constructor Create(PlainDriver: IZOraclePlainDriver;
-      Connection: IZConnection; Info: TStrings); overload;
+    constructor Create(const PlainDriver: IZOraclePlainDriver;
+      const Connection: IZConnection; const SQL: string; Info: TStrings); overload;
+    constructor Create(const PlainDriver: IZOraclePlainDriver;
+      const Connection: IZConnection; Info: TStrings); overload;
 
     procedure Prepare; override;
     procedure Unprepare; override;
@@ -121,12 +125,12 @@ type
     FCanBindInt64: Boolean;
     procedure SortZeosOrderToOCIParamsOrder;
     procedure FetchOutParamsFromOracleVars;
-    function GetProcedureSql(SelectProc: boolean): RawByteString;
+    function GetProcedureSql: RawByteString;
   protected
     procedure SetInParam(ParameterIndex: Integer; SQLType: TZSQLType;
       const Value: TZVariant); override;
     procedure RegisterParamTypeAndName(const ParameterIndex:integer;
-      ParamTypeName: String; const ParamName: String; Const {%H-}ColumnSize, {%H-}Precision: Integer);
+      const ParamTypeName: String; const ParamName: String; Const {%H-}ColumnSize, {%H-}Precision: Integer);
     procedure PrepareInParameters; override;
     procedure BindInParameters; override;
     procedure UnPrepareInParameters; override;
@@ -138,7 +142,7 @@ type
 
     Function ExecuteUpdatePrepared: Integer; override;
     function ExecuteQueryPrepared: IZResultSet; override;
-    constructor Create(Connection: IZConnection; const pProcName: string; Info: TStrings);
+    constructor Create(const Connection: IZConnection; const pProcName: string; Info: TStrings);
     destructor Destroy; override;
     procedure ClearParameters; override;
   end;
@@ -148,7 +152,7 @@ implementation
 uses
   Math, {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
   ZFastCode, ZDbcOracle, ZDbcOracleResultSet,
-  ZEncoding, ZDbcUtils;
+  ZEncoding, ZDbcUtils, ZDbcProperties;
 
 { TZOraclePreparedStatement }
 
@@ -160,7 +164,7 @@ uses
   @param Handle a connection handle pointer.
 }
 constructor TZOraclePreparedStatement.Create(
-  PlainDriver: IZOraclePlainDriver; Connection: IZConnection;
+  const PlainDriver: IZOraclePlainDriver; const Connection: IZConnection;
   const SQL: string; Info: TStrings);
 begin
   inherited Create(Connection, SQL, Info);
@@ -168,12 +172,12 @@ begin
   ResultSetType := rtForwardOnly;
   ASQL := ConvertToOracleSQLQuery;
   FCanBindInt64 := Connection.GetClientVersion >= 11002000;
-  FRowPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'row_prefetch_size', ''), 131072);
-  FZBufferSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'internal_buffer_size', ''), 131072);
+  FRowPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, DSProps_RowPrefetchSize, ''), 131072);
+  FZBufferSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, DSProps_InternalBufSize, ''), 131072);
 end;
 
-constructor TZOraclePreparedStatement.Create(PlainDriver: IZOraclePlainDriver;
-  Connection: IZConnection; Info: TStrings);
+constructor TZOraclePreparedStatement.Create(const PlainDriver: IZOraclePlainDriver;
+  const Connection: IZConnection; Info: TStrings);
 begin
   Create(PlainDriver, Connection, '', Info);
 end;
@@ -216,13 +220,13 @@ end;
 
 function TZOraclePreparedStatement.CreateResultSet: IZResultSet;
 begin
-  if FOpenResultSet <> nil then
+  if FOpenResultSet = nil then
   begin
-    IZResultSet(FOpenResultSet).Close;
-    FOpenResultSet := nil;
-  end;
-  Result := CreateOracleResultSet(FPlainDriver, Self, SQL, FHandle, FErrorHandle, FZBufferSize);
-  FOpenResultSet := Pointer(Result);
+    Result := CreateOracleResultSet(FPlainDriver, Self, SQL, FHandle, FErrorHandle, FZBufferSize);
+    FOpenResultSet := Pointer(Result);
+  end
+  else
+    Result := IZResultSet(FOpenResultSet);
 end;
 
 {**
@@ -245,7 +249,9 @@ begin
   {first determine oracle type and check out required buffer-size we need }
   for I := 0 to FParams^.AllocNum - 1 do
   begin
+    {$R-}
     CurrentVar := @FParams.Variables[I];
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
     CurrentVar.Handle := nil;
 
     { Artificially define Oracle internal type. }
@@ -290,11 +296,12 @@ procedure TZOraclePreparedStatement.BindInParameters;
 var
   I: Integer;
 begin
+  {$R-}
   if FParams^.AllocNum > 0 then
   for I := 0 to FParams^.AllocNum - 1 do
     LoadOracleVar(FPlainDriver, Connection, FErrorHandle, @FParams.Variables[I],
       InParamValues[i], ChunkSize, Max(1, Min(FIteration, ArrayCount)));
-
+  {$IFDEF RangeCheck} {$R+} {$ENDIF}
   inherited BindInParameters;
 end;
 
@@ -355,22 +362,16 @@ end;
 function TZOraclePreparedStatement.ExecutePrepared: Boolean;
 begin
   Result := False;
-
   { Prepares a statement. }
   Prepare;
-
-  if FOpenResultSet <> nil then
-  begin
-    IZResultSet(FOpenResultSet).Close;
-    FOpenResultSet := nil;
-  end;
-
+  PrepareLastResultSetForReUse;
   BindInParameters;
 
   if FStatementType = OCI_STMT_SELECT then
   begin
     { Executes the statement and gets a resultset. }
-    LastResultSet := CreateResultSet;
+    if not Assigned(LastResultSet) then
+      LastResultSet := CreateResultSet;
     Result := LastResultSet <> nil;
   end
   else
@@ -399,6 +400,7 @@ function TZOraclePreparedStatement.ExecuteQueryPrepared: IZResultSet;
 begin
   { Prepares a statement. }
   Prepare;
+  PrepareOpenResultSetForReUse;
   BindInParameters;
 
   { Executes the statement and gets a resultset. }
@@ -468,7 +470,7 @@ procedure TZOracleCallableStatement.Prepare;
 begin
   if not Prepared then
   begin
-    ASQL := GetProcedureSql(False);
+    ASQL := GetProcedureSql;
     { Allocates statement handles. }
     if (FHandle = nil) or (FErrorHandle = nil) then
       AllocateOracleStatementHandles(FPlainDriver, Connection,
@@ -482,6 +484,7 @@ begin
 end;
 
 
+{$WARNINGS OFF} //unreachable code as long FServerStmtCache isn't really used
 procedure TZOracleCallableStatement.UnPrepare;
 const {%H-}RELEASE_MODE: array[boolean] of integer = (OCI_DEFAULT,OCI_STMTCACHE_DELETE);
 begin
@@ -496,6 +499,7 @@ begin
     inherited Unprepare;
   end;
 end;
+{$WARNINGS OFF}
 
 procedure TZOracleCallableStatement.RegisterOutParameter(ParameterIndex,
   SQLType: Integer);
@@ -555,7 +559,7 @@ begin
 end;
 
 procedure TZOracleCallableStatement.RegisterParamTypeAndName(const ParameterIndex: integer;
-  ParamTypeName: String; const ParamName: String; Const ColumnSize, Precision: Integer);
+  const ParamTypeName: String; const ParamName: String; Const ColumnSize, Precision: Integer);
 var
   iPos: Integer;
   ProcName: String;
@@ -598,7 +602,9 @@ begin
   for I := 0 to FParams^.AllocNum - 1 do
   begin
     FParamNames[I] := Self.FOracleParams[I].pName;
+    {$R-}
     CurrentVar := @FParams.Variables[I];
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
     CurrentVar.Handle := nil;
     SQLType := TZSQLType(FOracleParams[I].pSQLType);
     { Artificially define Oracle internal type. }
@@ -622,7 +628,9 @@ begin
   { now let's set data-entries, bind them }
   for i := 0 to FParams.AllocNum -1 do
   begin
+    {$R-}
     CurrentVar := @FParams.Variables[I];
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
     CurrentVar.Handle := nil;
     SetVariableDataEntrys(CurrentBufferEntry, CurrentVar, FIteration);
     AllocDesriptors(FPlainDriver, (Connection as IZOracleConnection).GetConnectionHandle,
@@ -645,6 +653,7 @@ var
 begin
   FIteration := Max(1, Min(FIteration, ArrayCount));
   if FParams^.AllocNum > 0 then
+    {$R-}
     for I := 0 to FParams^.AllocNum - 1 do
       if (FOracleParams[i].pType in [1,3]) then
         LoadOracleVar(FPlainDriver, Connection, FErrorHandle, @FParams.Variables[I],
@@ -654,6 +663,7 @@ begin
         LoadOracleVar(FPlainDriver, Connection, FErrorHandle,
           @FParams.Variables[I], NullVariant, ChunkSize,
             Max(1, Min(FIteration, ArrayCount)));
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
   inherited BindInParameters;
 end;
 
@@ -761,12 +771,14 @@ var
       end;
   end;
 begin
+  {$R-}
   for I := 0 to FOracleParamsCount -1 do
     if FOracleParams[i].pType in [2,3,4] then
       SetOutParam(@FParams^.Variables[I], FOracleParams[i].pParamIndex{$IFNDEF GENERIC_INDEX}-1{$ENDIF});
+  {$IFDEF RangeCheck} {$R+} {$ENDIF}
 end;
 
-function TZOracleCallableStatement.GetProcedureSql(SelectProc: boolean): RawByteString;
+function TZOracleCallableStatement.GetProcedureSql: RawByteString;
 var
   sFunc: string;
   I, IncludeCount, LastIndex: Integer;
@@ -844,7 +856,7 @@ begin
   SetLength(FOracleParams, 0);
 end;
 
-constructor TZOracleCallableStatement.Create(Connection: IZConnection;
+constructor TZOracleCallableStatement.Create(const Connection: IZConnection;
   const pProcName: string; Info: TStrings);
 begin
   inherited Create(Connection, pProcName, Info);
@@ -855,8 +867,8 @@ begin
   PackageIncludedList := TStringList.Create;
   FOutParamCount := 0;
   FCanBindInt64 := Connection.GetClientVersion >= 11002000;
-  FRowPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'row_prefetch_size', ''), 131072);
-  FZBufferSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'internal_buffer_size', ''), 131072);
+  FRowPrefetchSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, DSProps_RowPrefetchSize, ''), 131072);
+  FZBufferSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, DSProps_InternalBufSize, ''), 131072);
   FIteration := 1;
 end;
 

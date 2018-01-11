@@ -57,10 +57,10 @@ interface
 
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, Contnrs,
-  ZPlainFirebirdDriver, ZCompatibility, ZDbcUtils, ZDbcIntfs,
+  ZPlainFirebirdDriver, ZCompatibility, ZDbcUtils, ZDbcIntfs, ZDbcCachedResultSet,
   ZDbcConnection, ZPlainFirebirdInterbaseConstants, ZSysUtils, ZDbcLogging,
   ZDbcInterbase6Utils, ZDbcGenericResolver, ZTokenizer, ZGenericSqlAnalyser,
-  ZURL;
+  ZDbcCache, ZURL;
 
 type
 
@@ -85,7 +85,7 @@ type
     function GetTrHandle: PISC_TR_HANDLE;
     function GetDialect: Word;
     function GetPlainDriver: IZInterbasePlainDriver;
-    procedure CreateNewDatabase(const SQL: RawByteString);
+    function GetXSQLDAMaxSize: LongWord;
   end;
 
   {** Implements Interbase6 Database Connection. }
@@ -99,14 +99,20 @@ type
     FTrHandle: TISC_TR_HANDLE;
     FStatusVector: TARRAY_ISC_STATUS;
     FHardCommit: boolean;
-  private
-    procedure StartTransaction; virtual;
+    FHostVersion: Integer;
+    FXSQLDAMaxSize: LongWord;
+    procedure CloseTransaction;
   protected
     procedure InternalCreate; override;
+    procedure OnPropertiesChange(Sender: TObject); override;
   public
+    procedure StartTransaction;
+    procedure SetTransactionIsolation(Level: TZTransactIsolationLevel); override;
+    function GetHostVersion: Integer; override;
     function GetDBHandle: PISC_DB_HANDLE;
     function GetTrHandle: PISC_TR_HANDLE;
     function GetDialect: Word;
+    function GetXSQLDAMaxSize: LongWord;
     function GetPlainDriver: IZInterbasePlainDriver;
     procedure CreateNewDatabase(const SQL: RawByteString);
 
@@ -118,6 +124,8 @@ type
 
     function CreateSequence(const Sequence: string; BlockSize: Integer):
       IZSequence; override;
+
+    procedure SetReadOnly(Value: Boolean); override;
 
     procedure Commit; override;
     procedure Rollback; override;
@@ -131,12 +139,21 @@ type
     function GetBinaryEscapeString(const Value: TBytes): String; override;
     function GetEscapeString(const Value: RawByteString): RawByteString; override;
     function GetEscapeString(const Value: ZWideString): ZWideString; override;
+    function GetServerProvider: TZServerProvider; override;
   end;
 
   {** Implements a specialized cached resolver for Interbase/Firebird. }
   TZInterbase6CachedResolver = class(TZGenericCachedResolver)
+  private
+    FInsertReturningFields: TStrings;
   public
+    constructor Create(const Statement: IZStatement; const Metadata: IZResultSetMetadata);
+    destructor Destroy; override;
     function FormCalculateStatement(Columns: TObjectList): string; override;
+    procedure PostUpdates(const Sender: IZCachedResultSet; UpdateType: TZRowUpdateType;
+      OldRowAccessor, NewRowAccessor: TZRowAccessor); override;
+    procedure UpdateAutoIncrementFields(const Sender: IZCachedResultSet; UpdateType: TZRowUpdateType;
+      OldRowAccessor, NewRowAccessor: TZRowAccessor; const Resolver: IZCachedResolver); override;
   end;
 
   {** Implements a Interbase 6 sequence. }
@@ -156,7 +173,8 @@ var
 implementation
 
 uses ZFastCode, ZDbcInterbase6Statement, ZDbcInterbase6Metadata, ZEncoding,
-  ZInterbaseToken, ZInterbaseAnalyser, ZDbcMetadata
+  ZInterbaseToken, ZInterbaseAnalyser, ZDbcMetadata, ZMessages,
+  ZConnProperties, ZDbcProperties
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 { TZInterbase6Driver }
@@ -203,11 +221,13 @@ begin
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebird20PlainDriver.Create));
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebird21PlainDriver.Create));
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebird25PlainDriver.Create));
+  AddSupportedProtocol(AddPlainDriverToCache(TZFirebird30PlainDriver.Create));
   // embedded drivers
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebirdD15PlainDriver.Create));
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebirdD20PlainDriver.Create));
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebirdD21PlainDriver.Create));
   AddSupportedProtocol(AddPlainDriverToCache(TZFirebirdD25PlainDriver.Create));
+  AddSupportedProtocol(AddPlainDriverToCache(TZFirebirdD30PlainDriver.Create));
 end;
 
 {**
@@ -216,7 +236,7 @@ end;
 }
 function TZInterbase6Driver.GetMajorVersion: Integer;
 begin
- Result := 1;
+  Result := 1;
 end;
 
 {**
@@ -234,9 +254,7 @@ end;
 }
 function TZInterbase6Driver.GetTokenizer: IZTokenizer;
 begin
-  if Tokenizer = nil then
-    Tokenizer := TZInterbaseTokenizer.Create;
-  Result := Tokenizer;
+  Result := TZInterbaseTokenizer.Create;
 end;
 
 {**
@@ -245,27 +263,13 @@ end;
 }
 function TZInterbase6Driver.GetStatementAnalyser: IZStatementAnalyser;
 begin
-  if Analyser = nil then
-    Analyser := TZInterbaseStatementAnalyser.Create;
-  Result := Analyser;
+  Result := TZInterbaseStatementAnalyser.Create; { thread save! Allways return a new Analyser! }
 end;
 
 { TZInterbase6Connection }
 
-{**
-  Releases a Connection's database and JDBC resources
-  immediately instead of waiting for
-  them to be automatically released.
-
-  <P><B>Note:</B> A Connection is automatically closed when it is
-  garbage collected. Certain fatal errors also result in a closed
-  Connection.
-}
-procedure TZInterbase6Connection.Close;
+procedure TZInterbase6Connection.CloseTransaction;
 begin
-  if Closed or (not Assigned(PlainDriver)) then
-     Exit;
-
   if FTrHandle <> 0 then
   begin
     if AutoCommit then
@@ -283,6 +287,23 @@ begin
     FTrHandle := 0;
     CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcDisconnect);
   end;
+end;
+
+{**
+  Releases a Connection's database and JDBC resources
+  immediately instead of waiting for
+  them to be automatically released.
+
+  <P><B>Note:</B> A Connection is automatically closed when it is
+  garbage collected. Certain fatal errors also result in a closed
+  Connection.
+}
+procedure TZInterbase6Connection.Close;
+begin
+  if Closed or (not Assigned(PlainDriver)) then
+    Exit;
+
+  CloseTransaction;
 
   if FHandle <> 0 then
   begin
@@ -303,21 +324,25 @@ end;
 procedure TZInterbase6Connection.Commit;
 begin
   if Closed then
-     Exit;
+    Exit;
 
   if FTrHandle <> 0 then
   begin
-    if FHardCommit then
-    begin
+    if FHardCommit then begin
       GetPlainDriver.isc_commit_transaction(@FStatusVector, @FTrHandle);
-      FTrHandle := 0;
-    end
-    else
+      // Jan Baumgarten: Added error checking here because setting the transaction
+      // handle to 0 before we have checked for an error is simply wrong.
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
+      DriverManager.LogMessage(lcTransaction,
+        ConSettings^.Protocol, 'TRANSACTION COMMIT');
+      FTrHandle := 0; //normaly not required! Old server code?
+    end else begin
       GetPlainDriver.isc_commit_retaining(@FStatusVector, @FTrHandle);
 
-    CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
-    DriverManager.LogMessage(lcTransaction,
-      ConSettings^.Protocol, 'TRANSACTION COMMIT');
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
+      DriverManager.LogMessage(lcTransaction,
+        ConSettings^.Protocol, 'TRANSACTION COMMIT');
+    end;
   end;
 end;
 
@@ -327,12 +352,11 @@ end;
 procedure TZInterbase6Connection.InternalCreate;
 var
   RoleName: string;
-  UserSetDialect: string;
   ConnectTimeout : integer;
 begin
   Self.FMetadata := TZInterbase6DatabaseMetadata.Create(Self, Url);
 
-  FHardCommit := StrToBoolEx(URL.Properties.Values['hard_commit']);
+  FHardCommit := StrToBoolEx(URL.Properties.Values[ConnProps_HardCommit]);
   { Sets a default Interbase port }
 
   if Self.Port = 0 then
@@ -341,9 +365,7 @@ begin
   { set default sql dialect it can be overriden }
   FDialect := 3;
 
-  UserSetDialect := Trim(URL.Properties.Values['dialect']);
-  if UserSetDialect <> '' then
-    FDialect := StrToIntDef(UserSetDialect, FDialect);
+  FDialect := StrToIntDef(URL.Properties.Values[ConnProps_Dialect], FDialect);
 
   { Processes connection properties. }
   self.Info.Values['isc_dpb_username'] := Url.UserName;
@@ -357,14 +379,29 @@ begin
     end;
   URL.Properties.Values['isc_dpb_lc_ctype'] := FClientCodePage;
 
-  RoleName := Trim(URL.Properties.Values['rolename']);
+  RoleName := Trim(URL.Properties.Values[ConnProps_Rolename]);
   if RoleName <> '' then
     URL.Properties.Values['isc_dpb_sql_role_name'] := UpperCase(RoleName);
 
-  ConnectTimeout := StrToIntDef(URL.Properties.Values['timeout'], -1);
+  ConnectTimeout := StrToIntDef(URL.Properties.Values[ConnProps_Timeout], -1);
   if ConnectTimeout >= 0 then
     URL.Properties.Values['isc_dpb_connect_timeout'] := ZFastCode.IntToStr(ConnectTimeout);
 
+  if StrToBoolEx(URL.Properties.Values[ConnProps_WireCompression]) then
+    URL.Properties.Values['isc_dpb_config'] :=
+      URL.Properties.Values['isc_dpb_config'] + LineEnding + 'WireCompression=true';
+
+  FXSQLDAMaxSize := 64*1024; //64KB by default
+  FHandle := 0;
+end;
+
+procedure TZInterbase6Connection.OnPropertiesChange(Sender: TObject);
+begin
+  if StrToBoolEx(Info.Values[ConnProps_HardCommit]) <> FHardCommit then
+  begin
+    if FTrHandle <> 0 then CloseTransaction;
+    FHardCommit := StrToBoolEx(Info.Values[ConnProps_HardCommit]);
+  end;
 end;
 
 {**
@@ -385,8 +422,21 @@ function TZInterbase6Connection.CreateRegularStatement(Info: TStrings):
   IZStatement;
 begin
   if IsClosed then
-     Open;
-  Result := TZInterbase6PreparedStatement.Create(Self, Info);
+    Open;
+  Result := TZInterbase6Statement.Create(Self, Info);
+end;
+
+{**
+  Gets the host's full version number. Initially this should be 0.
+  The format of the version returned must be XYYYZZZ where
+   X   = Major version
+   YYY = Minor version
+   ZZZ = Sub version
+  @return this server's full version number
+}
+function TZInterbase6Connection.GetHostVersion: Integer;
+begin
+  Result := FHostVersion;
 end;
 
 {**
@@ -408,6 +458,11 @@ begin
   Result := FDialect;
 end;
 
+function TZInterbase6Connection.GetXSQLDAMaxSize: LongWord;
+begin
+  Result := FXSQLDAMaxSize;
+end;
+
 {**
    Return native interbase plain driver
    @return plain driver
@@ -417,13 +472,18 @@ begin
   Result := PlainDriver as IZInterbasePlainDriver;
 end;
 
+function TZInterbase6Connection.GetServerProvider: TZServerProvider;
+begin
+  Result := spIB_FB;
+end;
+
 {**
    Get Interbase transaction handle
    @return transaction handle
 }
 function TZInterbase6Connection.GetTrHandle: PISC_TR_HANDLE;
 begin
-  if (FHardCommit and (FTrHandle = 0)) then
+  if (FTrHandle = 0) and not Closed then
     StartTransaction;
   Result := @FTrHandle;
 end;
@@ -434,20 +494,17 @@ end;
 procedure TZInterbase6Connection.Open;
 const sCS_NONE = 'NONE';
 var
-  DPB: PAnsiChar;
-  FDPBLength: Word;
+  DPB: RawByteString;
   DBName: array[0..512] of AnsiChar;
   NewDB: RawByteString;
 begin
   if not Closed then
-     Exit;
+    Exit;
 
   if TransactIsolationLevel = tiReadUncommitted then
     raise EZSQLException.Create('Isolation level do not capable');
   if ConSettings^.ClientCodePage = nil then
     CheckCharEncoding(FClientCodePage, True);
-
-  DPB := GenerateDPB(Info, FDPBLength{%H-}, FDialect);
 
   if HostName <> '' then
     if Port <> 3050 then
@@ -459,100 +516,104 @@ begin
   else
     {$IFDEF WITH_STRPCOPY_DEPRECATED}AnsiStrings.{$ENDIF}StrPCopy(DBName, ConSettings^.Database);
 
-  try
-    { Create new db if needed }
-    if Info.Values['createNewDatabase'] <> '' then
-    begin
-      NewDB := ConSettings^.ConvFuncs.ZStringToRaw(Info.Values['createNewDatabase'],
-        ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP);
-      CreateNewDatabase(NewDB);
-      { Logging connection action }
-      DriverManager.LogMessage(lcConnect, ConSettings^.Protocol,
-        'CREATE DATABASE "'+NewDB+'" AS USER "'+ ConSettings^.User+'"');
-      URL.Properties.Values['createNewDatabase'] := '';
-      //Allready Connected now if successfully created
-    end
-    else
-    begin
-      FHandle := 0;
-      { Connect to Interbase6 database. }
-      GetPlainDriver.isc_attach_database(@FStatusVector,
-        ZFastCode.StrLen(DBName), DBName,
-          @FHandle, FDPBLength, DPB);
-
-      { Check connection error }
-      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcConnect);
-    end;
-
+  { Create new db if needed }
+  if Info.Values[ConnProps_CreateNewDatabase] <> '' then
+  begin
+    NewDB := ConSettings^.ConvFuncs.ZStringToRaw(Info.Values[ConnProps_CreateNewDatabase],
+      ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP);
+    CreateNewDatabase(NewDB);
     { Logging connection action }
     DriverManager.LogMessage(lcConnect, ConSettings^.Protocol,
-      'CONNECT TO "'+ConSettings^.DataBase+'" AS USER "'+ConSettings^.User+'"');
+      'CREATE DATABASE "'+NewDB+'" AS USER "'+ ConSettings^.User+'"');
+    URL.Properties.Values[ConnProps_CreateNewDatabase] := '';
+  end;
 
-    { Start transaction }
-    if not FHardCommit then
-      StartTransaction;
+  FHandle := 0;
+  DPB := GenerateDPB(Info);
+  { Connect to Interbase6 database. }
+  GetPlainDriver.isc_attach_database(@FStatusVector,
+    ZFastCode.StrLen(DBName), DBName,
+  @FHandle, Length(DPB), Pointer(DPB));
 
-    inherited Open;
+  { Check connection error }
+  CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcConnect);
 
-    {Check for ClientCodePage: if empty switch to database-defaults
-      and/or check for charset 'NONE' which has a different byte-width
-      and no conversations where done except the collumns using collations}
-    with GetMetadata.GetCollationAndCharSet('', '', '', '') do
-    begin
-      if Next then
-        if FCLientCodePage = '' then
+  with GetMetadata.GetDatabaseInfo as IZInterbaseDatabaseInfo do
+  begin
+    CollectServerInformations; //keep this one first!
+    FHostVersion := GetHostVersion;
+    FXSQLDAMaxSize := GetMaxSQLDASize;
+  end;
+
+  { Dialect could have changed by isc_dpb_set_db_SQL_dialect command }
+  FDialect := GetDBSQLDialect(GetPlainDriver, @FHandle, ConSettings);
+
+  { Logging connection action }
+  DriverManager.LogMessage(lcConnect, ConSettings^.Protocol,
+    'CONNECT TO "'+ConSettings^.DataBase+'" AS USER "'+ConSettings^.User+'"');
+
+  { Start transaction }
+  if not FHardCommit then
+    StartTransaction;
+
+  inherited Open;
+
+  {Check for ClientCodePage: if empty switch to database-defaults
+    and/or check for charset 'NONE' which has a different byte-width
+    and no conversations where done except the collumns using collations}
+  with GetMetadata.GetCollationAndCharSet('', '', '', '') do
+  begin
+    if Next then
+      if FCLientCodePage = '' then
+      begin
+        FCLientCodePage := GetString(CollationAndCharSetNameIndex);
+        if URL.Properties.Values[DSProps_ResetCodePage] <> '' then
         begin
-          FCLientCodePage := GetString(CollationAndCharSetNameIndex);
-          if URL.Properties.Values['ResetCodePage'] <> '' then
-          begin
-            ConSettings^.ClientCodePage := GetIZPlainDriver.ValidateCharEncoding(FClientCodePage);
-            ResetCurrentClientCodePage(URL.Properties.Values['ResetCodePage']);
-          end
-          else
-            CheckCharEncoding(FClientCodePage);
+          ConSettings^.ClientCodePage := GetIZPlainDriver.ValidateCharEncoding(FClientCodePage);
+          ResetCurrentClientCodePage(URL.Properties.Values[DSProps_ResetCodePage]);
         end
         else
-          if GetString(CollationAndCharSetNameIndex) = sCS_NONE then
+          CheckCharEncoding(FClientCodePage);
+      end
+      else
+        if GetString(CollationAndCharSetNameIndex) = sCS_NONE then
+        begin
+          if not ( FClientCodePage = sCS_NONE ) then
           begin
-            if not ( FClientCodePage = sCS_NONE ) then
-            begin
-              URL.Properties.Values['isc_dpb_lc_ctype'] := sCS_NONE;
-              {save the user wanted CodePage-Informations}
-              URL.Properties.Values['ResetCodePage'] := FClientCodePage;
-              FClientCodePage := sCS_NONE;
-              { charset 'NONE' can't convert anything and write 'Data as is'!
-                If another charset was set on attaching the Server then all
-                column collations are retrieved with newly choosen collation.
-                BUT NO string convertations where done! So we need a
-                reopen (since we can set the Client-CharacterSet only on
-                connecting) to determine charset 'NONE' corectly. Then the column
-                collations have there proper CharsetID's to encode all strings
-                correctly. }
-              Self.Close;
-              Self.Open;
-              { Create a new PZCodePage for the new environment-variables }
-            end
-            else
-            begin
-              if URL.Properties.Values['ResetCodePage'] <> '' then
-              begin
-                ConSettings^.ClientCodePage := GetIZPlainDriver.ValidateCharEncoding(sCS_NONE);
-                ResetCurrentClientCodePage(URL.Properties.Values['ResetCodePage']);
-              end
-              else
-                CheckCharEncoding(sCS_NONE);
-            end;
+            URL.Properties.Values['isc_dpb_lc_ctype'] := sCS_NONE;
+            {save the user wanted CodePage-Informations}
+            URL.Properties.Values[DSProps_ResetCodePage] := FClientCodePage;
+            FClientCodePage := sCS_NONE;
+            { charset 'NONE' can't convert anything and write 'Data as is'!
+              If another charset was set on attaching the Server then all
+              column collations are retrieved with newly choosen collation.
+              BUT NO string convertations where done! So we need a
+              reopen (since we can set the Client-CharacterSet only on
+              connecting) to determine charset 'NONE' corectly. Then the column
+              collations have there proper CharsetID's to encode all strings
+              correctly. }
+            Self.Close;
+            Self.Open;
+            { Create a new PZCodePage for the new environment-variables }
           end
           else
-            if URL.Properties.Values['ResetCodePage'] <> '' then
-              ResetCurrentClientCodePage(URL.Properties.Values['ResetCodePage']);
-      Close;
-    end;
-    if FClientCodePage = sCS_NONE then
-      ConSettings.AutoEncode := True; //Must be set!
-  finally
-    {$IFDEF WITH_STRDISPOSE_DEPRECATED}AnsiStrings.{$ENDIF}StrDispose(DPB);
+          begin
+            if URL.Properties.Values[DSProps_ResetCodePage] <> '' then
+            begin
+              ConSettings^.ClientCodePage := GetIZPlainDriver.ValidateCharEncoding(sCS_NONE);
+              ResetCurrentClientCodePage(URL.Properties.Values[DSProps_ResetCodePage]);
+            end
+            else
+              CheckCharEncoding(sCS_NONE);
+          end;
+        end
+        else
+          if URL.Properties.Values[DSProps_ResetCodePage] <> '' then
+            ResetCurrentClientCodePage(URL.Properties.Values[DSProps_ResetCodePage]);
+    Close;
   end;
+  if FClientCodePage = sCS_NONE then
+    ConSettings.AutoEncode := True; //Must be set!
 end;
 
 {**
@@ -586,7 +647,7 @@ function TZInterbase6Connection.CreatePreparedStatement(
   const SQL: string; Info: TStrings): IZPreparedStatement;
 begin
   if IsClosed then
-     Open;
+    Open;
   Result := TZInterbase6PreparedStatement.Create(Self, SQL, Info);
 end;
 
@@ -620,7 +681,7 @@ function TZInterbase6Connection.CreateCallableStatement(const SQL: string;
   Info: TStrings): IZCallableStatement;
 begin
   if IsClosed then
-     Open;
+    Open;
   Result := TZInterbase6CallableStatement.Create(Self, SQL, Info);
 end;
 
@@ -638,12 +699,14 @@ begin
     if FHardCommit then
     begin
       GetPlainDriver.isc_rollback_transaction(@FStatusVector, @FTrHandle);
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings);
+      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'TRANSACTION ROLLBACK');
       FTrHandle := 0;
-    end
-    else
+    end else begin
       GetPlainDriver.isc_rollback_retaining(@FStatusVector, @FTrHandle);
-    CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings);
-    DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'TRANSACTION ROLLBACK');
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings);
+      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'TRANSACTION ROLLBACK');
+    end;
   end;
 end;
 
@@ -652,9 +715,9 @@ end;
   It does not matter what info we request, we are not looking at it, as long
   as it is something which should _always_ work if the connection is there.
   We check if the error returned is one of the net_* errors described in the
-  firebird client documentation (335544721 .. 335544727).
+  firebird client documentation (isc_network_error .. isc_net_write_err).
   Returns 0 if the connection is OK
-  Returns non zeor if the connection is not OK
+  Returns non zero if the connection is not OK
 }
 function TZInterbase6Connection.PingServer: integer;
 var
@@ -667,62 +730,145 @@ begin
   ErrorCode := GetPlainDriver.isc_database_info(@FStatusVector, @FHandle, 1, @DatabaseInfoCommand,
                            IBLocalBufferLength, Buffer);
 
-  if (ErrorCode >= 335544721) and (ErrorCode <= 335544727) then
-   result := -1
-  else
-   result := 0;
+  case ErrorCode of
+    isc_network_error..isc_net_write_err:
+      Result := -1
+    else
+      Result := 0;
+  end;
 end;
 
 {**
    Start Interbase transaction
 }
 procedure TZInterbase6Connection.StartTransaction;
-var
-  Params: TStrings;
-  PTEB: PISC_TEB;
-begin
-  PTEB := nil;
-  Params := TStringList.Create;
 
-  { Set transaction parameters by TransactIsolationLevel }
-  Params.Add('isc_tpb_version3');
-  case TransactIsolationLevel of
-    tiReadCommitted:
-      begin
-        Params.Add('isc_tpb_read_committed');
-        Params.Add('isc_tpb_rec_version');
-        Params.Add('isc_tpb_nowait');
-      end;
-    tiRepeatableRead:
-      begin
-        Params.Add('isc_tpb_concurrency');
-        Params.Add('isc_tpb_nowait');
-      end;
-    tiSerializable:
-      begin
-        Params.Add('isc_tpb_consistency');
-      end;
-    else
+const
+  Tpb_Access: array[boolean] of String = ('isc_tpb_write','isc_tpb_read');
+
+{ List of parameters that are assigned according to values of properties but
+  could be overwritten by user.
+  These parameters are all simple flags having no value so no splitting is required. }
+type
+  TOverwritableParams = (parTIL, parRW, parRecVer, parWait);
+  TOverwritableParamValues = array[TOverwritableParams] of string;
+
+  { Add all items from Src to Dest except those which define overwritable params.
+    Value of these params are returned in OverwritableParams array. }
+  procedure AddStrings(Dest, Src: TStrings; var OverwritableParams: TOverwritableParamValues);
+  var
+    I: Integer;
+    SrcPar: string;
+  begin
+    for I := 0 to Src.Count - 1 do
     begin
-      { Add user defined parameters for transaction }
-      Params.Clear;
-      Params.AddStrings(Info);
+      SrcPar := LowerCase(Src[I]);
+      if (SrcPar = 'isc_tpb_consistency') or
+         (SrcPar = 'isc_tpb_concurrency') or
+         (SrcPar = 'isc_tpb_read_committed') then
+        OverwritableParams[parTIL] := SrcPar
+      else
+      if (SrcPar = 'isc_tpb_wait') or
+         (SrcPar = 'isc_tpb_nowait') then
+        OverwritableParams[parWait] := SrcPar
+      else
+      if (SrcPar = 'isc_tpb_read') or
+         (SrcPar = 'isc_tpb_write') then
+        OverwritableParams[parRW] := SrcPar
+      else
+      if (SrcPar = 'isc_tpb_rec_version') or
+         (SrcPar = 'isc_tpb_no_rec_version') then
+        OverwritableParams[parRecVer] := SrcPar
+      else
+        Dest.Add(Src[I]);
     end;
   end;
 
-  try
-    { GenerateTPB return PTEB with null pointer tpb_address from default
-      transaction }
-    PTEB := GenerateTPB(Params, FHandle);
-    GetPlainDriver.isc_start_multiple(@FStatusVector, @FTrHandle, 1, PTEB);
-    CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
-    DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol,
-      'TRANSACTION STARTED.');
-  finally
-    FreeAndNil(Params);
-    {$IFDEF WITH_STRDISPOSE_DEPRECATED}AnsiStrings.{$ENDIF}StrDispose(PTEB.tpb_address);
-    FreeMem(PTEB);
-  end
+{EH: We do NOT handle the isc_tpb_autocommit of FB because we noticed a huge
+ performance drop especially for Batch executions. Note Zeos handles one Batch
+ Execution as one Update and loops until all batch array are send. FB with this
+ param commits after each "execute block" which definitally kills the idea and
+ the expected performance!}
+//const tpb_AutoCommit: array[boolean] of String = ('','isc_tpb_autocommit');
+var
+  Params: TStrings;
+  TPB: RawByteString;
+  TEB: TISC_TEB;
+  OverwritableParams: TOverwritableParamValues;
+begin
+  if FHandle <> 0 then
+  begin
+    if FTrHandle <> 0 then
+    begin {CLOSE Last Transaction first!}
+      GetPlainDriver.isc_commit_transaction(@FStatusVector, @FTrHandle);
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
+      FTrHandle := 0;
+    end;
+    Params := TStringList.Create;
+    OverwritableParams[parRW] := tpb_Access[ReadOnly];
+
+    { Set transaction parameters by TransactIsolationLevel }
+    case TransactIsolationLevel of
+      tiReadCommitted:
+        begin
+          OverwritableParams[parRecVer] := 'isc_tpb_rec_version';
+          OverwritableParams[parWait] := 'isc_tpb_nowait';
+          AddStrings(Params, Info, OverwritableParams);
+          OverwritableParams[parRW] := tpb_Access[ReadOnly];
+          OverwritableParams[parTIL] := 'isc_tpb_read_committed';
+        end;
+      tiRepeatableRead:
+        begin
+          OverwritableParams[parWait] := 'isc_tpb_nowait';
+          AddStrings(Params, Info, OverwritableParams);
+          OverwritableParams[parRW] := tpb_Access[ReadOnly];
+          OverwritableParams[parTIL] := 'isc_tpb_concurrency';
+        end;
+      tiSerializable:
+        begin
+          AddStrings(Params, Info, OverwritableParams);
+          OverwritableParams[parRW] := tpb_Access[ReadOnly];
+          OverwritableParams[parTIL] := 'isc_tpb_consistency';
+        end;
+      else
+      begin
+        OverwritableParams[parRW] := tpb_Access[ReadOnly];
+        { FB default values for non-standard TIL }
+        OverwritableParams[parTIL] := 'isc_tpb_concurrency';
+        OverwritableParams[parWait] := 'isc_tpb_wait';
+        AddStrings(Params, Info, OverwritableParams);
+        end;
+      end;
+
+    { Add overwitable parameters to the beginning of list }
+    if OverwritableParams[parRW] <> '' then
+      Params.Insert(0, OverwritableParams[parRW]);
+    if OverwritableParams[parWait] <> '' then
+      Params.Insert(0, OverwritableParams[parWait]);
+    if OverwritableParams[parRecVer] <> '' then
+      Params.Insert(0, OverwritableParams[parRecVer]);
+    if OverwritableParams[parTIL] <> '' then
+      Params.Insert(0, OverwritableParams[parTIL]);
+
+    try
+      TPB := GenerateTPB(Params);
+      TEB := GenerateTEB(@FHandle, TPB);
+
+      GetPlainDriver.isc_start_multiple(@FStatusVector, @FTrHandle, 1, @TEB);
+      CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcTransaction);
+      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol,
+        'TRANSACTION STARTED.');
+    finally
+      FreeAndNil(Params);
+    end
+  end;
+end;
+
+procedure TZInterbase6Connection.SetTransactionIsolation(Level: TZTransactIsolationLevel);
+begin
+  if (Level <> TransactIsolationLevel) and (FHandle <> 0) then
+    CloseTransaction;
+  Inherited SetTransactionIsolation(Level);
 end;
 
 {**
@@ -737,12 +883,16 @@ begin
   GetPlainDriver.isc_dsql_execute_immediate(@FStatusVector, @FHandle, @TrHandle,
     0, PAnsiChar(sql), FDialect, nil);
   CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcExecute, SQL);
+  //disconnect from the newly created database because the connection character set is NONE,
+  //which usually nobody wants
+  GetPlainDriver.isc_detach_database(@FStatusVector, @FHandle);
+  CheckInterbase6Error(GetPlainDriver, FStatusVector, ConSettings, lcExecute, SQL);
 end;
 
 function TZInterbase6Connection.GetBinaryEscapeString(const Value: RawByteString): String;
 begin
   //http://tracker.firebirdsql.org/browse/CORE-2789
-  if EndsWith(GetPlainDriver.GetProtocol, '2.5') then
+  if (GetMetadata.GetDatabaseInfo as IZInterbaseDatabaseInfo).SupportsBinaryInSQL then
     if (Length(Value)*2+3) < 32*1024 then
       Result := GetSQLHexString(PAnsiChar(Value), Length(Value))
     else
@@ -754,7 +904,7 @@ end;
 function TZInterbase6Connection.GetBinaryEscapeString(const Value: TBytes): String;
 begin
   //http://tracker.firebirdsql.org/browse/CORE-2789
-  if EndsWith(GetPlainDriver.GetProtocol, '2.5') then
+  if (GetMetadata.GetDatabaseInfo as IZInterbaseDatabaseInfo).SupportsBinaryInSQL then
     if (Length(Value)*2+3) < 32*1024 then
       Result := GetSQLHexString(PAnsiChar(Value), Length(Value))
     else
@@ -824,7 +974,30 @@ begin
   Result := TZInterbase6Sequence.Create(Self, Sequence, BlockSize);
 end;
 
+procedure TZInterbase6Connection.SetReadOnly(Value: Boolean);
+begin
+  if (ReadOnly <> Value) and (FTrHandle <> 0) then
+    CloseTransaction;
+  ReadOnly := Value;
+end;
+
 { TZInterbase6CachedResolver }
+
+constructor TZInterbase6CachedResolver.Create(const Statement: IZStatement; const Metadata: IZResultSetMetadata);
+var
+  Fields: string;
+begin
+  inherited;
+  Fields := Statement.GetParameters.Values[DSProps_InsertReturningFields];
+  if Fields <> '' then
+    FInsertReturningFields := ExtractFields(Fields, [';', ',']);
+end;
+
+destructor TZInterbase6CachedResolver.Destroy;
+begin
+  inherited;
+  FreeAndNil(FInsertReturningFields);
+end;
 
 {**
   Forms a where clause for SELECT statements to calculate default values.
@@ -849,6 +1022,40 @@ begin
 // <-- ms
 end;
 
+procedure TZInterbase6CachedResolver.PostUpdates(const Sender: IZCachedResultSet;
+  UpdateType: TZRowUpdateType; OldRowAccessor,
+  NewRowAccessor: TZRowAccessor);
+begin
+  inherited PostUpdates(Sender, UpdateType, OldRowAccessor, NewRowAccessor);
+
+  if (UpdateType = utInserted) then
+    UpdateAutoIncrementFields(Sender, UpdateType, OldRowAccessor, NewRowAccessor, Self);
+end;
+
+procedure TZInterbase6CachedResolver.UpdateAutoIncrementFields(
+  const Sender: IZCachedResultSet; UpdateType: TZRowUpdateType; OldRowAccessor,
+  NewRowAccessor: TZRowAccessor; const Resolver: IZCachedResolver);
+var
+  I, ColumnIdx: Integer;
+  RS: IZResultSet;
+begin
+  inherited;
+
+  RS := InsertStatement.GetResultSet;
+  if RS = nil then
+    Exit;
+
+  for I := 0 to FInsertReturningFields.Count - 1 do
+  begin
+    ColumnIdx := Metadata.FindColumn(FInsertReturningFields[I]);
+    if ColumnIdx = InvalidDbcIndex then
+      raise EZSQLException.Create(Format(SColumnWasNotFound, [FInsertReturningFields[I]]));
+    NewRowAccessor.SetValue(ColumnIdx, RS.GetValueByName(FInsertReturningFields[I]));
+  end;
+
+  RS.Close; { Without Close RS keeps circular ref to Statement causing mem leak }
+end;
+
 { TZInterbase6Sequence }
 
 {**
@@ -862,10 +1069,9 @@ var
 begin
   Statement := Connection.CreateStatement;
   ResultSet := Statement.ExecuteQuery(Format(
-    'SELECT GEN_ID("%s", 0) FROM rdb$generators ' +
-    'WHERE rdb$generators.rdb$generator_name = ''%s''', [Name, Name]));
+    'SELECT %s FROM RDB$DATABASE', [GetCurrentValueSQL, Name]));
   if ResultSet.Next then
-    Result := ResultSet.GetLong(1)
+    Result := ResultSet.GetLong(FirstDbcIndex)
   else
     Result := inherited GetCurrentValue;
   ResultSet.Close;
@@ -887,11 +1093,10 @@ var
   ResultSet: IZResultSet;
 begin
   Statement := Connection.CreateStatement;
-  ResultSet := Statement.ExecuteQuery(Format(
-    'SELECT GEN_ID("%s", %d) FROM rdb$generators ' +
-    'WHERE rdb$generators.rdb$generator_name = ''%s''', [Name, BlockSize, Name]));
+  ResultSet := Statement.ExecuteQuery(
+    Format('SELECT %s FROM RDB$DATABASE', [GetNextValueSQL]));
   if ResultSet.Next then
-    Result := ResultSet.GetLong(1)
+    Result := ResultSet.GetLong(FirstDbcIndex)
   else
     Result := inherited GetNextValue;
   ResultSet.Close;
@@ -900,7 +1105,10 @@ end;
 
 function TZInterbase6Sequence.GetNextValueSQL: string;
 begin
-  Result := Format(' GEN_ID("%s", %d) ', [Name, BlockSize]);
+  if (Connection.GetMetadata.GetDatabaseInfo as IZInterbaseDatabaseInfo).SupportsNextValueFor and (BlockSize = 1) then
+    Result := Format(' NEXT VALUE FOR "%s" ', [Name])
+  else
+    Result := Format(' GEN_ID("%s", %d) ', [Name, BlockSize]);
 end;
 
 initialization
