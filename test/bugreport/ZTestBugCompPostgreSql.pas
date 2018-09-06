@@ -63,7 +63,7 @@ uses
     DBCtrls,
     {$ENDIF}
   {$ENDIF}
-  Classes, DB, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, ZDataset,
+  Classes, DB, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, ZDataset, ZAbstractRODataset,
   ZConnection, ZDbcIntfs, ZSqlTestCase, ZSqlUpdate,
   ZCompatibility, SysUtils, ZTestConsts, ZSqlProcessor, ZSqlMetadata;
 
@@ -73,6 +73,11 @@ type
   TZTestCompPostgreSQLBugReport = class(TZAbstractCompSQLTestCase)
   protected
     function GetSupportedProtocols: string; override;
+  private
+    TestSF274_GotNotified: Boolean;
+    procedure InternalTestSF224(Query: TZAbstractRODataset);
+    procedure TestSF274_OnNotify(Sender: TObject; Event: string;
+        ProcessID: Integer; Payload: string);
   published
     procedure Test707339;
     procedure Test707337;
@@ -100,6 +105,11 @@ type
     procedure TestUnicodeEscape;
     procedure TestTicket51;
     procedure TestSF81;
+    procedure TestSF218_royo;
+    procedure TestSF218_kgizmo;
+    procedure TestSF224;
+    procedure TestSF266;
+    procedure TestSF274;
   end;
 
   TZTestCompPostgreSQLBugReportMBCs = class(TZAbstractCompSQLTestCaseMBCs)
@@ -113,7 +123,7 @@ type
   end;
 implementation
 
-uses ZSysUtils, ZTestCase;
+uses ZSysUtils, ZTestCase, ZPgEventAlerter, DateUtils, {$IFDEF WITH_VCL_PREFIX}Vcl.Forms{$ELSE}Forms{$ENDIF};
 
 { TZTestCompPostgreSQLBugReport }
 
@@ -686,8 +696,8 @@ begin
       Query.SQL.Text := 'select * from people where xp_id=1';
       Query.Open;
       Fail('Incorrect syntax error processing');
-    except
-      // Ignore.
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
 
     Query.SQL.Text := 'select * from people where p_id=1';
@@ -733,6 +743,34 @@ end;
   Test the bug report #1043252.
   "No Argument for format %s" exception.
 }
+
+type
+  TZAbstractRODatasetHack = class(TZAbstractRODataset)
+  end;
+
+procedure TZTestCompPostgreSQLBugReport.InternalTestSF224(
+  Query: TZAbstractRODataset);
+var S: String;
+begin
+  with TZAbstractRODatasetHack(Query) do
+  try
+    SQL.Text := 'select * from guid_test';
+    Open;
+    Check(Fields[1].DataType = ftGUID);
+    S := Fields[1].AsString;
+    CheckEquals('{BAD51CFF-F21F-40E8-A9EA-838977A681BE}', s, 'UUID different');
+    Close;
+    SQL.Text := 'select * from guid_test where guid = :x';
+    ParamByName('x').AsString := '{BAD51CFF-F21F-40E8-A9EA-838977A681BE}';
+    Open;
+    Check(Fields[1].DataType = ftGUID);
+    S := Fields[1].AsString;
+    CheckEquals('{BAD51CFF-F21F-40E8-A9EA-838977A681BE}', s, 'UUID not found');
+  finally
+    Free;
+  end;
+end;
+
 procedure TZTestCompPostgreSQLBugReport.Test1043252;
 var
   Query: TZQuery;
@@ -875,15 +913,26 @@ end;
  for indeterminable parameters types. handle_indeterminate_datatype should fix it}
 procedure TZTestCompPostgreSQLBugReport.TestUnknowParam;
 var Query: TZQuery;
+  I: Integer;
+  NowDate: TDateTime;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
   Query := CreateQuery;
   Connection.Connect;
   try
-    Query.SQL.Text := 'select :p1 as Param1, :p2 as param2';
-    Query.Open;
-    Query.Close;
+    NowDate := Now;
+    Query.SQL.Text := 'select :p1 as Param1, :p2 as param2, :p3 as param3, :p4 as param4';
+    Query.Params[1].AsTime := NowDate;
+    Query.Params[2].AsDate := NowDate;
+    Query.Params[3].AsDateTime := NowDate;
+    for i := 0 to 5 do begin
+      Query.Open;
+      //Check(Query.Fields[1].AsDateTime = Frac(NowDate), 'time value passed by unknown param');
+      //Check(Query.Fields[2].AsDateTime = Int(NowDate), 'date value passed by unknown param');
+      //Check(Query.Fields[2].AsDateTime = NowDate, 'timestamp value passed by unknown param');
+      Query.Close;
+    end;
   finally
     Query.Free;
   end;
@@ -1047,6 +1096,107 @@ begin
   end;
 end;
 
+//see: http://zeoslib.sourceforge.net/viewtopic.php?f=40&t=49966
+procedure TZTestCompPostgreSQLBugReport.TestSF218_kgizmo;
+var
+  TempConnection: TZConnection;
+  Query: TZQuery;
+const
+  TestString = 'Test string'+#10+'Test string';
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  TempConnection := CreateDatasetConnection;
+  TempConnection.Properties.Add('standard_conforming_strings=OFF');
+  Query := TZQuery.Create(nil);
+  TempConnection.Connect;
+  Query.Connection := TempConnection;
+  try
+    Query.SQL.Text := 'select s_char||''\n''||s_varchar from string_values where 1=1 and (s_varbit iLike :param)';
+    Query.ParamByName('param').AsString := '%'; //kgizmo reports: Everything is OK with Params but I get "\n" string in the result text.
+    Query.Open;
+    Query.Next;
+    CheckEquals(TestString, Query.Fields[0].AsString, 'wrong string returned tested with pgadmin and standard_conforming_strings=OFF');
+    Query.Close;
+
+    Query.SQL.Text := 'select s_char||E''\n''||s_varchar from string_values where 1=1 and (s_varbit iLike :param)';
+    Query.ParamByName('param').AsString := '%'; //kgizmo reports: Parameter not found.
+    Query.Open;
+    Query.Next;
+    CheckEquals(TestString, Query.Fields[0].AsString, 'wrong string returned tested with pgadmin and standard_conforming_strings=OFF');
+    Query.Close;
+
+    TempConnection.Disconnect;
+    TempConnection.Properties.Add('standard_conforming_strings=ON');
+    TempConnection.Connect;
+
+    Query.SQL.Text := 'select s_char||E''\n''||s_varchar from string_values where 1=1 and (s_varbit iLike :param)';
+    Query.ParamByName('param').AsString := '%'; //kgizmo reports: Parameter not found.
+    Query.Open;
+    Query.Next;
+    CheckEquals(TestString, Query.Fields[0].AsString, 'wrong string returned tested with pgadmin and standard_conforming_strings=OFF');
+    Query.Close;
+  finally
+    Query.Free;
+    TempConnection.Free;
+  end;
+end;
+
+//see: http://zeoslib.sourceforge.net/viewtopic.php?f=40&t=49966
+procedure TZTestCompPostgreSQLBugReport.TestSF218_royo;
+var
+  TempConnection: TZConnection;
+  Query: TZQuery;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  TempConnection := CreateDatasetConnection;
+  TempConnection.Properties.Add('standard_conforming_strings=OFF');
+  Query := TZQuery.Create(nil);
+  TempConnection.Connect;
+  Query.Connection := TempConnection;
+  try
+    Query.SQL.Text := 'select * from sys_user where user_id = :user_id';
+    Query.ParamByName('user_id').AsInteger := 1; //royo reports: param not found???
+    Query.SQL.Text := '';
+    TempConnection.Disconnect;
+    TempConnection.Properties.Add('standard_conforming_strings=ON');
+    TempConnection.Connect;
+    Query.Connection := TempConnection;
+    Query.SQL.Text := 'select * from sys_user where user_id = :user_id';
+    Query.ParamByName('user_id').AsInteger := 1; //royo reports: param not found???
+    Query.SQL.Text := '';
+  finally
+    Query.Free;
+    TempConnection.Free;
+  end;
+end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF224;
+var
+  Query: TZQuery;
+  ROQuery: TZReadOnlyQuery;
+begin
+  Connection.Connect;
+  if Connection.DbcConnection.GetHostVersion < 9 then
+    Exit;
+  Query := TZQuery.Create(nil);
+  Query.ReadOnly := True;
+  Query.Connection := Connection;
+  InternalTestSF224(Query);
+  Query := TZQuery.Create(nil);
+  Query.ReadOnly := False;
+  Query.Connection := Connection;
+  InternalTestSF224(Query);
+  ROQuery := TZReadOnlyQuery.Create(nil);
+  ROQuery.Connection := Connection;
+  InternalTestSF224(ROQuery);
+  ROQuery := TZReadOnlyQuery.Create(nil);
+  ROQuery.IsUniDirectional := True;
+  ROQuery.Connection := Connection;
+  InternalTestSF224(ROQuery);
+end;
+
 procedure TZTestCompPostgreSQLBugReport.TestSF81;
 var
   TempConnection: TZConnection;
@@ -1073,6 +1223,67 @@ begin
   finally
     FreeAndNil(TempConnection);
   end;
+end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF266;
+var
+  Query: TZQuery;
+begin
+  try
+    Connection.Connect;
+    Query := TZQuery.Create(nil);
+    Query.Connection := Connection;
+    Query.SQL.Append('CREATE OR REPLACE FUNCTION pc_chartoint(chartoconvert character varying)');
+    Query.SQL.Append('  RETURNS integer AS');
+    Query.SQL.Append('$BODY$');
+    Query.SQL.Append('SELECT CASE WHEN trim($1) SIMILAR TO ''[0-9]+''');
+    Query.SQL.Append('        THEN CAST(trim($1) AS integer)');
+    Query.SQL.Append('    ELSE NULL END;');
+    Query.SQL.Append('');
+    Query.SQL.Append('$BODY$');
+    Query.SQL.Append('  LANGUAGE ''sql'' IMMUTABLE STRICT;');
+    Query.SQL.Append('');
+    Query.SQL.Append('INSERT INTO blob_values(b_id, b_text) values (261,'''');');
+    Query.ExecSQL;
+    Connection.ExecuteDirect('drop function pc_chartoint(chartoconvert character varying)');
+    Connection.ExecuteDirect('delete from blob_values where b_id = 261');
+  finally
+    if Assigned(Query) then FreeAndNil(Query);
+    Connection.Disconnect;
+  end;
+end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF274;
+var
+  Listener: TZPgEventAlerter;
+  EndTime: TDateTime;
+begin
+  TestSF274_GotNotified := false;
+  try
+    Listener := TZPgEventAlerter.Create(nil);
+    Listener.Events.Add('zeostest');
+    Listener.Connection := Connection;
+    Listener.OnNotify := TestSF274_OnNotify;
+    Connection.Connect;
+    Listener.Active := True;
+    EndTime := IncSecond(Now, 2);
+    Connection.ExecuteDirect('NOTIFY zeostest');
+    while (not TestSF274_GotNotified) and (EndTime > Now) do begin
+      Application.ProcessMessages;
+      Sleep(0);
+    end;
+    Listener.Active := false;
+    Check(TestSF274_GotNotified, 'Didn''t get PostgreSQL notification.');
+  finally
+    Connection.Disconnect;
+    if Assigned(Listener) then FreeAndNil(Listener);
+  end;
+end;
+
+procedure TZTestCompPostgreSQLBugReport.TestSF274_OnNotify(Sender: TObject; Event: string;
+        ProcessID: Integer; Payload: string);
+begin
+  TestSF274_GotNotified := true;
 end;
 
 initialization

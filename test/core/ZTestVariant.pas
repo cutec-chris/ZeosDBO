@@ -182,13 +182,20 @@ implementation
 
 uses ZEncoding;
 
+//type
+//  CyrillicString = type Ansistring(1251);
+//  WesternString = type Ansistring(1252);
+
 var
   TestVar1, TestVar2: TZVariant;
   TestConSettings: PZConSettings;
+  S: ZWideString;
 
-const
-  //S: ZWideString = 'üהצßגבא';
-  S: ZwideString = #$0061#$0062#$0063#$0430#$0431#$0432#$00FC#$00E4#$00F6;
+//const
+  //S: ZWideString = 'üהצßגבא';                                 // Hiergeist old
+  //S: ZwideString = #$0061#$0062#$0063#$0430#$0431#$0432#$00FC#$00E4#$00F6; // Fr0sT
+  //S: ZWideString = AnsiString(#$FC#$E4#$F6#$DF#$E2#$E1#$E0);  // Marsupilami
+  //S: ZwideString = #$00FC#$00E4#$00F6#$00DF#$00E2#$00E1#$00E0;  // Hiergeist
 
 { TZTestVariantCase }
 
@@ -237,23 +244,11 @@ begin
   CheckEquals(True, Value.VBoolean);
   CheckEquals(Ord(vtBoolean), Ord(Value.VType));
 
-  Check(Manager.IsNull(Value) = False);
+  Check(not Manager.IsNull(Value));
   CheckEquals(True, Manager.GetAsBoolean(Value));
-  try
-    Manager.GetAsString(Value);
-    Fail('Incorrect getString operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsInteger(Value);
-    Fail('Incorrect getInt operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsFloat(Value);
-    Fail('Incorrect getDouble operation behaviour.');
-  except
-  end;
+  CheckEquals(StrTrueUp, Manager.GetAsString(Value));
+  CheckEquals(1, Manager.GetAsInteger(Value));
+  CheckEquals(1, Manager.GetAsFloat(Value));
 end;
 
 {**
@@ -268,17 +263,9 @@ begin
   CheckEquals(123, Value.VInteger);
   CheckEquals(Ord(vtInteger), Ord(Value.VType));
 
-  Check(Manager.IsNull(Value) = False);
-  try
-    Manager.GetAsBoolean(Value);
-    Fail('Incorrect getBoolean operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsString(Value);
-    Fail('Incorrect getString operation behaviour.');
-  except
-  end;
+  Check(not Manager.IsNull(Value));
+  CheckEquals(True, Manager.GetAsBoolean(Value));
+  CheckEquals('123', Manager.GetAsString(Value));
   CheckEquals(123, Manager.GetAsInteger(Value));
   CheckEquals(123, Manager.GetAsFloat(Value), 0.1);
 end;
@@ -298,22 +285,10 @@ begin
   CheckEquals('123', Manager.GetAsString(Value));
   CheckEquals(Ord(vtString), Ord(Value.VType));
 
-  Check(Manager.IsNull(Value) = False);
-  try
-    Manager.GetAsBoolean(Value);
-    Fail('Incorrect getString operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsInteger(Value);
-    Fail('Incorrect getInt operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsFloat(Value);
-    Fail('Incorrect getDouble operation behaviour.');
-  except
-  end;
+  Check(not Manager.IsNull(Value));
+  CheckEquals(True, Manager.GetAsBoolean(Value));
+  CheckEquals(123, Manager.GetAsInteger(Value));
+  CheckEquals(123, Manager.GetAsFloat(Value), 0.1);
 end;
 
 {**
@@ -328,22 +303,10 @@ begin
   CheckEquals(123.456, Value.VFloat, 0.001);
   CheckEquals(Ord(vtFloat), Ord(Value.VType));
 
-  Check(Manager.IsNull(Value) = False);
-  try
-    Manager.GetAsBoolean(Value);
-    Fail('Incorrect getBoolean operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsString(Value);
-    Fail('Incorrect getString operation behaviour.');
-  except
-  end;
-  try
-    Manager.GetAsInteger(Value);
-    Fail('Incorrect getInteger operation behaviour.');
-  except
-  end;
+  Check(not Manager.IsNull(Value));
+  CheckEquals(True, Manager.GetAsBoolean(Value));
+  CheckEquals('123.456', Manager.GetAsString(Value));
+  CheckEquals(123, Manager.GetAsInteger(Value));
   CheckEquals(123.456, Manager.GetAsFloat(Value), 0.001);
 end;
 
@@ -892,67 +855,26 @@ procedure TZDefVarManagerConvertCase.TestConvert;
 begin
   Test_AnsiStringFromString;
   Test_AnsiStringFromUTF8String;
-  try
-    Test_AnsiStringFromRawByteString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
+  CheckException(Test_AnsiStringFromRawByteString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
   Test_AnsiStringFromUnicodeString;
 
   Test_UTF8StringFromString;
   Test_UTF8StringFromAnsiString;
-  try
-    Test_UTF8StringFromRawByteString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
+  CheckException(Test_UTF8StringFromRawByteString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
   Test_UTF8StringFromUnicodeString;
 
   Test_StringFromAnsiString;
   Test_StringFromUTF8String;
-  try
-    Test_StringFromRawByteString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
+  CheckException(Test_StringFromRawByteString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
   Test_StringFromUnicodeString;
-
-  try
-    Test_RawByteStringFromString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
-  try
-    Test_RawByteStringFromAnsiString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
-  try
-    Test_RawByteStringFromUTF8String;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
-  try
-    Test_RawByteStringFromUnicodeString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
+  CheckException(Test_RawByteStringFromString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
+  CheckException(Test_RawByteStringFromAnsiString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
+  CheckException(Test_RawByteStringFromUTF8String, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
+  CheckException(Test_RawByteStringFromUnicodeString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
   Test_UnicodeStringFromString;
   Test_UnicodeStringFromAnsiString;
   Test_UnicodeStringFromUTF8String;
-  try
-    Test_UnicodeStringFromRawByteString;
-    Check(False, 'Wrong RawByteString behavior'+GetOptionString);
-  except
-    Check(True);
-  end;
+  CheckException(Test_UnicodeStringFromRawByteString, EZVariantException, '', 'Wrong RawByteString behavior'+GetOptionString);
 end;
 
 { TZClientVarManagerConvertCase }
@@ -1081,6 +1003,7 @@ initialization
   Raw_CPUTF8_Var := EncodeRawByteString(UTF8Encode(S));
   Raw_CP1252_Var := EncodeRawByteString(ZUnicodeToRaw(S, zCP_WIN1252));
 
+  S := Chr($FC)+Chr($E4)+Chr($F6)+Chr($DF)+Chr($E2)+Chr($E1)+Chr($E0);
 
 finalization
   Dispose(TestConSettings^.ClientCodePage);

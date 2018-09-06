@@ -85,6 +85,7 @@ type
   private
     FParams: TParams;
     FScript: TZSQLStrings;
+
     FScriptParser: TZSQLScriptParser;
     FConnection: TZAbstractConnection;
     FBeforeExecute: TZProcessorNotifyEvent;
@@ -108,7 +109,7 @@ type
     procedure SetParamCheck(Value: Boolean);
     function GetParamChar: Char;
     procedure SetParamChar(Value: Char);
-    procedure UpdateSQLStrings(Sender: TObject);
+    procedure UpdateSQLStrings({%H-}Sender: TObject);
   protected
     procedure CheckConnected;
     function DoOnError(StatementIndex: Integer; E: Exception):
@@ -393,6 +394,7 @@ begin
                 FParams);
               Statement.ExecuteUpdatePrepared;
             end;
+          Statement.Close; //see test Test1049821: if LastResultSet is assigned
           Statement := nil;
         except
           on E: Exception do

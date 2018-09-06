@@ -57,10 +57,8 @@ interface
 
 uses
   Types,
-{$IFNDEF UNIX}
 {$IFDEF ENABLE_ADO}
   ZDbcAdo,
-{$ENDIF}
 {$ENDIF}
 {$IFDEF ENABLE_DBLIB}
   ZDbcDbLib,
@@ -115,7 +113,6 @@ type
     {$ENDIF}
     function GetVersion: string;
     procedure SetUseMetadata(AValue: Boolean);
-    procedure SetVersion(const {%H-}Value: string);
     procedure SetControlsCodePage(const Value: TZControlsCodePage);
   protected
     FURL: TZURL;
@@ -228,7 +225,7 @@ type
     procedure RegisterDataSet(DataSet: TDataset);
     procedure UnregisterDataSet(DataSet: TDataset);
     function ExecuteDirect(const SQL: string): boolean; overload;
-    function ExecuteDirect(const SQL: string; var RowsAffected: integer): boolean; overload;
+    function ExecuteDirect(const SQL: string; out RowsAffected: integer): boolean; overload;
     // Modified by cipto 8/2/2007 10:16:50 AM
     procedure RegisterSequence(Sequence: TComponent);
     procedure UnregisterSequence(Sequence: TComponent);
@@ -249,7 +246,6 @@ type
     function GetBinaryEscapeStringFromString(const BinaryString: AnsiString): String; overload;
     function GetBinaryEscapeStringFromStream(const Stream: TStream): String; overload;
     function GetBinaryEscapeStringFromFile(const FileName: String): String; overload;
-    function GetAnsiEscapeString(const Ansi: AnsiString): String;
     function GetURL: String;
 
     property InTransaction: Boolean read GetInTransaction;
@@ -288,7 +284,7 @@ type
       default False;
     property LoginPrompt: Boolean read FLoginPrompt write FLoginPrompt
       default False;
-    property Version: string read GetVersion write SetVersion stored False;
+    property Version: string read GetVersion stored False;
     property DesignConnection: Boolean read FDesignConnection
       write FDesignConnection default False;
 
@@ -528,74 +524,72 @@ end;
 }
 procedure TZAbstractConnection.SetProperties(Value: TStrings);
 begin
-  if Value <> nil then
-  begin
-    if ( Trim(Value.Values[ConnProps_CodePage]) <> '' ) then
-      FClientCodepage := Trim(Value.Values[ConnProps_CodePage])
-    else
-      Value.Values[ConnProps_CodePage] := FClientCodepage;
+  FURL.Properties.Clear;
+  if Value = nil then Exit;
 
-    { check autoencodestrings }
-    {$IF (defined(MSWINDOWS) or defined(WITH_LCONVENCODING) or defined(FPC_HAS_BUILTIN_WIDESTR_MANAGER)) and not defined(UNICODE)}
-    FAutoEncode := StrToBoolEx(Value.Values[ConnProps_AutoEncodeStrings]);
-    if Connected then
-      DbcConnection.AutoEncodeStrings := FAutoEncode;
+  if ( Trim(Value.Values[ConnProps_CodePage]) <> '' ) then
+    FClientCodepage := Trim(Value.Values[ConnProps_CodePage])
+  else
+    Value.Values[ConnProps_CodePage] := FClientCodepage;
+
+  { check autoencodestrings }
+  {$IF (defined(MSWINDOWS) or defined(WITH_LCONVENCODING) or defined(FPC_HAS_BUILTIN_WIDESTR_MANAGER)) and not defined(UNICODE)}
+  FAutoEncode := StrToBoolEx(Value.Values[ConnProps_AutoEncodeStrings]);
+  if Connected then
+    DbcConnection.AutoEncodeStrings := FAutoEncode;
+  {$ELSE}
+    {$IFDEF UNICODE}
+    Value.Values[ConnProps_AutoEncodeStrings] := 'True';
     {$ELSE}
-      {$IFDEF UNICODE}
-      Value.Values[ConnProps_AutoEncodeStrings] := 'True';
-      {$ELSE}
-      Value.Values[ConnProps_AutoEncodeStrings] := '';
-      {$ENDIF}
-    {$IFEND}
+    Value.Values[ConnProps_AutoEncodeStrings] := '';
+    {$ENDIF}
+  {$IFEND}
 
-    if Value.IndexOf(ConnProps_ControlsCP) = -1 then
-      {$IFDEF UNICODE}
-      if ControlsCodePage = cCP_UTF16 then
-        Value.Values[ConnProps_ControlsCP] := 'CP_UTF16'
-      else
-        Value.Values[ConnProps_ControlsCP] := 'GET_ACP'
-      {$ELSE}
-      case ControlsCodePage of //automated check..
-        cCP_UTF16: Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
-        cCP_UTF8: Value.Values[ConnProps_ControlsCP] := 'CP_UTF8';
-        cGET_ACP: Value.Values[ConnProps_ControlsCP] := 'GET_ACP';
-      end
-      {$ENDIF}
+  if Value.IndexOf(ConnProps_ControlsCP) = -1 then
+    {$IFDEF UNICODE}
+    if ControlsCodePage = cCP_UTF16 then
+      Value.Values[ConnProps_ControlsCP] := 'CP_UTF16'
     else
-      {$IFDEF UNICODE}
-      if Value.Values[ConnProps_ControlsCP] = 'CP_UTF8' then
+      Value.Values[ConnProps_ControlsCP] := 'GET_ACP'
+    {$ELSE}
+    case ControlsCodePage of //automated check..
+      cCP_UTF16: Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
+      cCP_UTF8: Value.Values[ConnProps_ControlsCP] := 'CP_UTF8';
+      cGET_ACP: Value.Values[ConnProps_ControlsCP] := 'GET_ACP';
+    end
+    {$ENDIF}
+  else
+    {$IFDEF UNICODE}
+    if Value.Values[ConnProps_ControlsCP] = 'CP_UTF8' then
+    begin
+      Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
+      FControlsCodePage := cCP_UTF16;
+    end;
+    {$ELSE}
+      {$IFNDEF WITH_WIDEFIELDS} //old FPC and D7
+      if Value.Values[ConnProps_ControlsCP] = 'CP_UTF16' then
       begin
-        Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
-        FControlsCodePage := cCP_UTF16;
+        FControlsCodePage := cGET_ACP;
+        Value.Values[ConnProps_ControlsCP] := {$IFDEF DELPHI}'GET_ACP'{$ELSE}'CP_UTF8'{$ENDIF};
       end;
       {$ELSE}
-        {$IFNDEF WITH_WIDEFIELDS} //old FPC and D7
-        if Value.Values[ConnProps_ControlsCP] = 'CP_UTF16' then
-        begin
-          FControlsCodePage := cGET_ACP;
-          Value.Values[ConnProps_ControlsCP] := {$IFDEF DELPHI}'GET_ACP'{$ELSE}'CP_UTF8'{$ENDIF};
-        end;
-        {$ELSE}
-        if Value.Values[ConnProps_ControlsCP] = 'GET_ACP' then
-          FControlsCodePage := cGET_ACP
+      if Value.Values[ConnProps_ControlsCP] = 'GET_ACP' then
+        FControlsCodePage := cGET_ACP
+      else
+        if Value.Values[ConnProps_ControlsCP] = 'CP_UTF8' then
+          FControlsCodePage := cCP_UTF8
         else
-          if Value.Values[ConnProps_ControlsCP] = 'CP_UTF8' then
-            FControlsCodePage := cCP_UTF8
+          if Value.Values[ConnProps_ControlsCP] = 'CP_UTF16' then
+            FControlsCodePage := cCP_UTF16
           else
-            if Value.Values[ConnProps_ControlsCP] = 'CP_UTF16' then
-              FControlsCodePage := cCP_UTF16
-            else
-              case ControlsCodePage of //automated check..
-                cCP_UTF16: Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
-                cCP_UTF8: Value.Values[ConnProps_ControlsCP] := 'CP_UTF8';
-                cGET_ACP: Value.Values[ConnProps_ControlsCP] := 'GET_ACP';
-              end;
-        {$ENDIF}
+            case ControlsCodePage of //automated check..
+              cCP_UTF16: Value.Values[ConnProps_ControlsCP] := 'CP_UTF16';
+              cCP_UTF8: Value.Values[ConnProps_ControlsCP] := 'CP_UTF8';
+              cGET_ACP: Value.Values[ConnProps_ControlsCP] := 'GET_ACP';
+            end;
       {$ENDIF}
-    FURL.Properties.Text := Value.Text;
-  end
-  else
-    FURL.Properties.Clear;
+    {$ENDIF}
+  FURL.Properties.AddStrings(Value);
 end;
 
 {**
@@ -1499,17 +1493,6 @@ begin
   end;
 end;
 
-{**
-  EgonHugeist: Returns a detectable String to inform the Tokenizer
-    to do no UTF8Encoding if neccessary
-  @param Ansi Represents the AnsiString wich has to prepered
-  @Result: A Prepared String like '~<|1023|<~''Binary-data-string(1023 Char's)''~<|1023|<~
-}
-function TZAbstractConnection.GetAnsiEscapeString(const Ansi: AnsiString): String;
-begin
-  Result := DbcConnection.GetDriver.GetTokenizer.GetEscapeString(String(Ansi));
-end;
-
 function TZAbstractConnection.GetURL: String;
 begin
   Result := ConstructURL(FURL.UserName, FURL.Password);
@@ -1659,10 +1642,6 @@ begin
       SetValue;
 end;
 
-procedure TZAbstractConnection.SetVersion(const Value: string);
-begin
-end;
-
 procedure TZAbstractConnection.CloseAllSequences;
 var
   I: Integer;
@@ -1709,23 +1688,14 @@ end;
   Returns an indication if execution was succesfull.
 }
 function TZAbstractConnection.ExecuteDirect(const SQL: string;
-  var RowsAffected: integer): boolean;
-var
-  stmt : IZStatement;
+  out RowsAffected: integer): boolean;
 begin
+  RowsAffected := -1;
   try
-    try
-      CheckConnected;
-      stmt := DbcConnection.CreateStatement;
-      RowsAffected:= stmt.ExecuteUpdate(SQL);
-      result := (RowsAffected <> -1);
-    except
-      RowsAffected := -1;
-      result := False;
-      raise; {------ added by Henk 09-10-2012 --------}
-    end;
+    CheckConnected;
+    RowsAffected := DbcConnection.CreateStatement.ExecuteUpdate(SQL);
   finally
-    stmt:=nil;
+    result := (RowsAffected <> -1);
   end;
 end;
 

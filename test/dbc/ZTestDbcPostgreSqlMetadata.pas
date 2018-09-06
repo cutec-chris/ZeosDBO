@@ -57,7 +57,7 @@ interface
 {$I ZDbc.inc}
 uses
   SysUtils, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF},
-  ZDbcIntfs, ZClasses, ZCompatibility, ZSqlTestCase, ZDbcPostgreSql;
+  ZDbcIntfs, ZCompatibility, ZSqlTestCase, ZDbcPostgreSql;
 
 type
 
@@ -788,9 +788,12 @@ begin
 end;
 
 procedure TZTestPostgreSqlMetadataCase.TestIdentifierQuoting;
+var QuoteStr: string;
 begin
-  Check(Metadata.GetIdentifierConvertor.Quote('A9A')=Metadata.GetDatabaseInfo.GetIdentifierQuoteString[1]+'A9A'+Metadata.GetDatabaseInfo.GetIdentifierQuoteString[length(Metadata.GetDatabaseInfo.GetIdentifierQuoteString)]);
-  Check(Metadata.GetIdentifierConvertor.Quote('a9A')=Metadata.GetDatabaseInfo.GetIdentifierQuoteString[1]+'a9A'+Metadata.GetDatabaseInfo.GetIdentifierQuoteString[length(Metadata.GetDatabaseInfo.GetIdentifierQuoteString)]);
+  QuoteStr := Metadata.GetDatabaseInfo.GetIdentifierQuoteString;
+
+  CheckEquals(QuoteStr[1]+'A9A'+QuoteStr[Length(QuoteStr)], Metadata.GetIdentifierConvertor.Quote('A9A'));
+  CheckEquals(QuoteStr[1]+'a9A'+QuoteStr[Length(QuoteStr)], Metadata.GetIdentifierConvertor.Quote('a9A'));
 end;
 
 initialization

@@ -68,7 +68,6 @@ type
   protected
     procedure SetUp; override;
     procedure TearDown; override;
-    function GetConnectionUrl: string;
   end;
 
   {** Implements a test case for class TZStoredProc. }
@@ -175,25 +174,6 @@ begin
   StoredProc.Close;
   StoredProc.Free;
   inherited TearDown;
-end;
-
-{**
-  Gets a connection URL string.
-  @return a built connection URL string.
-}
-function TZTestStoredProcedure.GetConnectionUrl: string;
-var
-  TempProperties :TStrings;
-  I: Integer;
-begin
-  TempProperties := TStringList.Create;
-  for I := 0 to High(Properties) do
-  begin
-    TempProperties.Add(Properties[I])
-  end;
-  Result := DriverManager.ConstructURL(Protocol, HostName, Database,
-  UserName, Password, Port, TempProperties);
-  TempProperties.Free;
 end;
 
 {**
@@ -1011,7 +991,9 @@ begin
   CheckEquals(1, StoredProc.Fields.Count);
 
   CheckEquals('10', StoredProc.Fields[0].DisplayName);
-  CheckEquals(Ord(ftLargeInt), Ord(StoredProc.Fields[0].DataType));
+  // behavior inconsistency between mysql and mariadb:
+  // mysql maps const ordinals to Largeint, mariadb to integer(if in range)
+//  CheckEquals(Ord(ftLargeInt), Ord(StoredProc.Fields[0].DataType));
   CheckEquals(10, StoredProc.Fields[0].AsInteger);
 
   CheckEquals(False, StoredProc.EOR);
@@ -1072,7 +1054,9 @@ begin
   CheckEquals(1, StoredProc.Fields.Count);
 
   CheckEquals('10', StoredProc.Fields[0].DisplayName);
-  CheckEquals(Ord(ftLargeInt), Ord(StoredProc.Fields[0].DataType));
+  // behavior inconsistency between mysql and mariadb:
+  // mysql maps const ordinals to Largeint, mariadb to integer(if in range)
+  //CheckEquals(Ord(ftLargeInt), Ord(StoredProc.Fields[0].DataType));
   CheckEquals(10, StoredProc.Fields[0].AsInteger);
 
 end;

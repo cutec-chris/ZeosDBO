@@ -65,7 +65,7 @@ unit ZPgEventAlerter;
 interface
 {$I ZComponent.inc}
 uses
-  SysUtils, Classes, ExtCtrls,
+  SysUtils, Classes, {$IFDEF WITH_VCL_PREFIX}Vcl.ExtCtrls{$ELSE}ExtCtrls{$ENDIF},
   ZDbcPostgreSql, ZPlainPostgreSqlDriver, ZConnection, ZAbstractRODataset;
 
 type
@@ -226,11 +226,11 @@ end;
 procedure TZPgEventAlerter.TimerTick(Sender: TObject);
 begin
   if not FActive then
-   FTimer.Enabled := False
+    TTimer(Sender).Enabled := False
   else
   begin
     if FProcessor <> nil then
-      FTimer.Enabled := False
+      TTimer(Sender).Enabled := False
     else
      CheckEvents;
   end;
@@ -240,10 +240,10 @@ procedure TZPgEventAlerter.OpenNotify;
 var
   I        : Integer;
   Tmp      : array [0..255] of AnsiChar;
-  Handle   : PZPostgreSQLConnect;
+  Handle   : TPGconn;
   ICon     : IZPostgreSQLConnection;
-  PlainDRV : IZPostgreSQLPlainDriver;
-  Res: PGresult;
+  PlainDRV : TZPostgreSQLPlainDriver;
+  Res: TPGresult;
 begin
   if not Boolean(Pos('postgresql', FConnection.Protocol)) then
     raise EZDatabaseError.Create('Ivalid connection protocol. Need <postgres>, get ' +
@@ -257,14 +257,14 @@ begin
   if not FConnection.Connected then
     Exit;
   ICon     := (FConnection.DbcConnection as IZPostgreSQLConnection);
-  Handle   := ICon.GetConnectionHandle;
+  Handle   := ICon.GetPGconnAddress^;
   PlainDRV := ICon.GetPlainDriver;
   if Handle = nil then
     Exit;
     for I := 0 to FChildEvents.Count-1 do
   begin
     {$IFDEF WITH_STRPCOPY_DEPRECATED}AnsiStrings.{$ENDIF}StrPCopy(Tmp, 'listen ' + AnsiString(FChildEvents.Strings[I]));
-    Res := PlainDRV.ExecuteQuery(Handle, Tmp);
+    Res := PlainDRV.PQExec(Handle, Tmp);
     if (PlainDRV.PQresultStatus(Res) <> TZPostgreSQLExecStatusType(
       PGRES_COMMAND_OK)) then
    begin
@@ -281,24 +281,24 @@ procedure TZPgEventAlerter.CloseNotify;
 var
   I        : Integer;
   tmp      : array [0..255] of AnsiChar;
-  Handle   : PZPostgreSQLConnect;
+  Handle   : TPGconn;
   ICon     : IZPostgreSQLConnection;
-  PlainDRV : IZPostgreSQLPlainDriver;
-  Res: PGresult;
+  PlainDRV : TZPostgreSQLPlainDriver;
+  Res: TPGresult;
 begin
   if not FActive then
     Exit;
   FActive        := False;
   FTimer.Enabled := False;
   ICon           := (FConnection.DbcConnection as IZPostgreSQLConnection);
-  Handle         := ICon.GetConnectionHandle;
+  Handle         := ICon.GetPGconnAddress^;
   PlainDRV       := ICon.GetPlainDriver;
   if Handle = nil then
     Exit;
   for I := 0 to FChildEvents.Count-1 do
   begin
     {$IFDEF WITH_STRPCOPY_DEPRECATED}AnsiStrings.{$ENDIF}StrPCopy(Tmp, 'unlisten ' + AnsiString(FChildEvents.Strings[i]));
-    Res := PlainDRV.ExecuteQuery(Handle, Tmp);
+    Res := PlainDRV.PQExec(Handle, Tmp);
     if (PlainDRV.PQresultStatus(Res) <> TZPostgreSQLExecStatusType(PGRES_COMMAND_OK)) then
     begin
       PlainDRV.PQclear(Res);
@@ -311,12 +311,12 @@ end;
 procedure TZPgEventAlerter.CheckEvents;
 var
   Notify: PZPostgreSQLNotify;
-  Handle   : PZPostgreSQLConnect;
+  Handle   : TPGconn;
   ICon     : IZPostgreSQLConnection;
-  PlainDRV : IZPostgreSQLPlainDriver;
+  PlainDRV : TZPostgreSQLPlainDriver;
 begin
   ICon      := (FConnection.DbcConnection as IZPostgreSQLConnection);
-  Handle    := ICon.GetConnectionHandle;
+  Handle    := ICon.GetPGconnAddress^;
   if Handle=nil then
   begin
     FTimer.Enabled := False;
@@ -330,15 +330,15 @@ begin
   end;
   PlainDRV  := ICon.GetPlainDriver;
 
-  if PlainDRV.ConsumeInput(Handle)=1 then
+  if PlainDRV.PQconsumeInput(Handle)=1 then
   begin
     while True do
     begin
-      Notify := PlainDRV.Notifies(Handle);
+      Notify := PZPostgreSQLNotify(PlainDRV.PQnotifies(Handle));
       if Notify = nil then
         Break;
       HandleNotify(Notify);
-      PlainDRV.FreeNotify(Notify);
+      PlainDRV.PQFreemem(Notify);
     end;
   end;
 end;

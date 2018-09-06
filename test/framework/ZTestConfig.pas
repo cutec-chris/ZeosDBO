@@ -1,4 +1,4 @@
-{*********************************************************}
+{************************************************f*********}
 {                                                         }
 {                 Zeos Database Objects                   }
 {           Configuration for Testing Framework           }
@@ -173,9 +173,9 @@ type
     FEnableMemCheck: Boolean;
     FMemCheckLogFile: string;
     FMemCheckShowResult: Boolean;
+    FScriptPath: string;
 
     function GetConfigFileName: string;
-    function GetConfigFilePath: string;
   public
     destructor Destroy; override;
 
@@ -187,8 +187,8 @@ type
 
     property ConfigFile: TIniFile read FConfigFile;
     property ConfigFileName: string read FConfigFileName;
-    property ConfigFilePath: string read GetConfigFilePath;
     property ConfigLoaded: Boolean read FConfigLoaded;
+    property ScriptPath: String read FScriptPath;
 
     property EnableMemCheck: Boolean read FEnableMemCheck;
     property MemCheckLogFile: string read FMemCheckLogFile;
@@ -203,14 +203,15 @@ type
     runall:          boolean;
     batch:           boolean;
     xml:             boolean;
+    xmlfilename:     string;
     norebuild:       boolean;
     suite:           boolean;
     memcheck:        boolean;
     memcheck_file:   String;
     suiteitems:      TStringDynArray;
+    suitename:       String;
     sqlmonitor:      boolean;
     sqlmonitorfile:  String;
-
   end;
 var
   CommandLineSwitches: TCommandLineSwitches;
@@ -362,28 +363,43 @@ begin
     Result := ExtractFileDir(ParamStr(0)) + PATH_DELIMITER + Path;
 
   FConfigFileName := Result;
-end;
-
-{**
-  Gets a fully qualified path of the configuration file.
-  @return a fully qualified path of the configuration file.
-}
-function TZTestConfiguration.GetConfigFilePath: string;
-begin
-  if FConfigFileName = '' then
-    FConfigFileName := GetConfigFileName;
-  Result := ExtractFilePath(FConfigFileName);
+  Writeln('Config File Name: ' + Result);
 end;
 
 {**
   Loads a configuration from the configuration file.
 }
 procedure TZTestConfiguration.LoadConfig;
+var
+  ConfigFileName: String;
+  ScriptPath: String;
 begin
   { Reads a configuration file from the disk. }
   if Assigned(FConfigFile) then
     FConfigFile.Free;
-  FConfigFile := TIniFile.Create(GetConfigFileName);
+  ConfigFileName := GetConfigFileName;
+  if not FileExists(ConfigFileName)
+  then raise Exception.Create('Config file doesn''t exist!');
+
+  ConfigFileName := ExpandFileName(ConfigFileName);
+  FConfigFile := TIniFile.Create(ConfigFileName);
+  ScriptPath := FConfigFile.ReadString('common', 'common.scriptpath', '');
+
+  if ScriptPath <> '' then begin
+    if DirectoryExists(ScriptPath)
+    then FScriptPath := ExpandFileName(ScriptPath)
+    else if DirectoryExists(ExtractFilePath(ParamStr(0)) + ScriptPath)
+      then FScriptPath := ExtractFilePath(ParamStr(0)) + ScriptPath
+      else if DirectoryExists(ExtractFilePath(ConfigFileName) + ScriptPath)
+        then FScriptPath := ExtractFilePath(ConfigFileName) + ScriptPath
+        else FScriptPath := ExtractFilePath(FConfigFileName);
+  end else begin
+    FScriptPath := ExtractFilePath(FConfigFileName);
+  end;
+
+  if FScriptPath <> ''
+    then if FScriptPath[Length(FScriptPath)] <> PathDelim
+      then FScriptPath := FScriptPath + PathDelim;
 
   { Reads default properties. }
   FEnableMemCheck := StrToBoolEx(ReadProperty(COMMON_GROUP,
@@ -448,24 +464,62 @@ end;
   this function should return 'core;parsesql'
 }
 {$IFNDEF FPC}
-function GetCommandLineSwitchValue(ShortSwitch: String; Longswitch: String):String;
+function GetCommandLineSwitchValue(ShortSwitch: String; LongSwitch: String; IgnoreCasse: Boolean = true):String;
 var
   i: integer;
+  expectedShortSwitch, expectedLongSwitch, currentSwitch: String;
 begin
   Result := '';
-  for i := 1 to ParamCount-1 do // Don't check the last one, as we can't return the next param then!!
+  if IgnoreCasse then begin
+    expectedLongSwitch := LowerCase(Longswitch);
+    expectedShortSwitch := LowerCase(ShortSwitch);
+  end else begin
+    expectedLongSwitch := Longswitch;
+    expectedShortSwitch := ShortSwitch;
+  end;
+
+  for i := 1 to ParamCount do // Don't check the last one, as we can't return the next param then!!
   begin
-    If (ParamStr(i)[1]='-') then
-      if (CompareText(ParamStr(i),'-'+ShortSwitch) = 0) or
-         (CompareText(ParamStr(i),'-'+LongSwitch) = 0) then
+    if IgnoreCasse then currentSwitch := LowerCase(ParamStr(i)) else currentSwitch := ParamStr(i);
+    
+    If (currentSwitch[1]='-') then
+      if ((CompareText(currentSwitch,'-'+expectedShortSwitch) = 0) or
+         (CompareText(currentSwitch,'-'+expectedLongSwitch) = 0)) and
+         (i < ParamCount) then
         Result := ParamStr(i+1);
-    If (ParamStr(i)[1]='/') then
-      if (CompareText(ParamStr(i),'/'+ShortSwitch) = 0) or
-         (CompareText(ParamStr(i),'/'+LongSwitch) = 0) then
+    If (currentSwitch[1]='/') then
+      if ((CompareText(currentSwitch,'/'+expectedShortSwitch) = 0) or
+         (CompareText(currentSwitch,'/'+expectedLongSwitch) = 0)) and
+         (i < ParamCount) then
         Result := ParamStr(i+1);
+    if StartsWith(currentSwitch, '--'+expectedLongSwitch+'=') then
+      Result := Copy(ParamStr(i), Length('--'+expectedLongSwitch+'=') + 1, Length(ParamStr(i)));
   end;
 end;
 {$ENDIF}
+
+function FindCmdLineSwitch(Switch: String; IgnoreCase: Boolean): boolean;
+var
+  expectedSwitch, currentSwitch: String;
+  x: Integer;
+begin
+  Result := false;
+  if Length(Switch) > 0 then begin
+    if IgnoreCase then expectedSwitch := LowerCase(Switch) else expectedSwitch := Switch;
+
+    for x := 1 to ParamCount do begin
+      if IgnoreCase then currentSwitch := LowerCase(ParamStr(x)) else currentSwitch := ParamStr(x);
+      if (currentSwitch = '--' + expectedSwitch) or
+        StartsWith(currentSwitch, '--' + expectedSwitch + '=')
+      then begin
+        Result := true;
+        break;
+      end;
+    end;
+  end;
+
+  if not Result then Result := SysUtils.FindCmdLineSwitch(Switch, IgnoreCase);
+end;
 
 {**
   Convert Command Line Switches to aa compiler independent global record
@@ -479,18 +533,22 @@ begin
   CommandLineSwitches.runall := Application.HasOption('a', 'all');
   CommandLineSwitches.batch := Application.HasOption('b', 'batch');
   CommandLineSwitches.xml := Application.HasOption('x', 'xml');
+  if CommandLineSwitches.xml then
+    CommandLineSwitches.XmlFileName := Application.GetOptionValue('x', 'xml');
   CommandLineSwitches.norebuild := Application.HasOption('n', 'norebuild');
   CommandLineSwitches.memcheck := Application.HasOption('memcheck');
   if CommandLineSwitches.memcheck then
     CommandLineSwitches.memcheck_file := Application.GetOptionValue('memcheck')
   else
     CommandLineSwitches.memcheck_file := '';
-  CommandLineSwitches.suite := Application.HasOption('suite');
+  CommandLineSwitches.suite := Application.HasOption('s', 'suite');
   If CommandLineSwitches.suite then
     CommandLineSwitches.suiteitems := SplitStringToArray(Application.GetOptionValue('suite'),LIST_DELIMITERS);
   CommandLineSwitches.sqlmonitor := Application.HasOption('m','monitor');
   If CommandLineSwitches.sqlmonitor then
     CommandLineSwitches.sqlmonitorfile := Application.GetOptionValue('m', 'monitor');
+  if Application.HasOption('suitename') then
+    CommandLineSwitches.suitename := Application.GetOptionValue('suitename');
   {$ELSE}
   CommandLineSwitches.help := (FindCmdLineSwitch('H',true) or FindCmdLineSwitch('Help',true));
   CommandLineSwitches.list := (FindCmdLineSwitch('L',true) or FindCmdLineSwitch('List',true));
@@ -498,6 +556,8 @@ begin
   CommandLineSwitches.runall := (FindCmdLineSwitch('A',true) or FindCmdLineSwitch('All',true));
   CommandLineSwitches.batch := (FindCmdLineSwitch('B',true) or FindCmdLineSwitch('Batch',true));
   CommandLineSwitches.xml := (FindCmdLineSwitch('X',true) or FindCmdLineSwitch('XML',true));
+  if CommandLineSwitches.xml then
+    CommandLineSwitches.xmlfilename := GetCommandLineSwitchValue('X' ,'XML');
   CommandLineSwitches.norebuild := (FindCmdLineSwitch('N',true) or FindCmdLineSwitch('NoRebuild',true));
   CommandLineSwitches.memcheck := FindCmdLineSwitch('MemCheck',true);
   if CommandLineSwitches.memcheck then
@@ -510,6 +570,8 @@ begin
   CommandLineSwitches.sqlmonitor := (FindCmdLineSwitch('M',true) or FindCmdLineSwitch('Monitor',true));
   If CommandLineSwitches.sqlmonitor then
     CommandLineSwitches.sqlmonitorfile := GetCommandLineSwitchValue('M' ,'Monitor');
+  if FindCmdLineSwitch('SuiteName',true) then
+    CommandLineSwitches.suitename := GetCommandLineSwitchValue('' ,'SuiteName');
   {$ENDIF}
 end;
 
@@ -522,6 +584,8 @@ end;
 function CreateTestSuite:ITestSuite;
 var
   I, J: integer;
+  RealSuiteName: String;
+
   procedure CheckTestRegistry (test:ITest; ATestName:string);
   var s, c : string;
       I, p : integer;
@@ -558,7 +622,8 @@ var
 begin
   If CommandLineSwitches.Suite then
     begin
-      Result := TTestSuite.Create('Suite');
+      if CommandLineSwitches.suitename = '' then RealSuiteName := 'Suite' else RealSuiteName := CommandLineSwitches.suitename;
+      Result := TTestSuite.Create(RealSuiteName);
       for J := 0 to High(CommandLineSwitches.suiteitems) do
         for I := 0 to RegisteredTests.Tests.count-1 do
           CheckTestRegistry (ITest(RegisteredTests.Tests[I]), CommandLineSwitches.suiteitems[J]);

@@ -61,9 +61,10 @@ interface
 
 {$I ZPlain.inc}
 
-{$A-} //pack the records!
+//{$A-} //pack the records!   EH: nope this is wrong!
+{$Z+} //enum to DWORD
 uses
-   ZCompatibility;
+   ZCompatibility, Types;
 
 const
 { General Declarations }
@@ -113,6 +114,7 @@ const
    MYSQL_NO_DATA = 100;
    MYSQL_DATA_TRUNCATED  = 101;
 
+{$MINENUMSIZE 4}
 type
   TMySqlOption = (
     MYSQL_OPT_CONNECT_TIMEOUT, MYSQL_OPT_COMPRESS, MYSQL_OPT_NAMED_PIPE,
@@ -133,7 +135,11 @@ type
     MYSQL_SERVER_PUBLIC_KEY,
     MYSQL_ENABLE_CLEARTEXT_PLUGIN,
     MYSQL_OPT_CAN_HANDLE_EXPIRED_PASSWORDS,
-    MYSQL_OPT_SSL_ENFORCE
+    MYSQL_OPT_SSL_ENFORCE,
+
+    MYSQL_OPT_MAX_ALLOWED_PACKET, MYSQL_OPT_NET_BUFFER_LENGTH,
+    MYSQL_OPT_TLS_VERSION,
+    MYSQL_OPT_SSL_MODE
   );
 const
   TMySqlOptionMinimumVersion: array[TMySqlOption] of Integer =
@@ -176,11 +182,33 @@ const
       {MYSQL_SERVER_PUBLIC_KEY}                 50606,
       {MYSQL_ENABLE_CLEARTEXT_PLUGIN}           50607,
       {MYSQL_OPT_CAN_HANDLE_EXPIRED_PASSWORDS}  50610,
-      {MYSQL_OPT_SSL_ENFORCE}                   50703
+      {MYSQL_OPT_SSL_ENFORCE}                   50703,
+      {MYSQL_OPT_MAX_ALLOWED_PACKET}            60111,
+      {MYSQL_OPT_NET_BUFFER_LENGTH}             60111,
+      {MYSQL_OPT_TLS_VERSION}                   60111,
+      {MYSQL_OPT_SSL_MODE}                      60111
     );
+
+  STMT_INDICATOR_NTS=-1;      //String is null terminated
+  STMT_INDICATOR_NONE=0;      //No semantics
+  STMT_INDICATOR_NULL=1;      //NULL value
+  STMT_INDICATOR_DEFAULT=2;   //Use columns default value
+  STMT_INDICATOR_IGNORE=3;    //Skip update of column
+  STMT_INDICATOR_IGNORE_ROW=4; //Skip update of row
+
 type
+  // EgonHugeist: Use always a 4Byte unsigned Integer for Windows otherwise MySQL64 has problems on Win64!
+  // don't know anything about reported issues on other OS's
+  ULong                 = {$IFDEF MSWINDOWS}LongWord{$ELSE}NativeUInt{$ENDIF};
+  ULongLong             = UInt64;
+  PULong                = ^ULong;
+  PULongLong            = ^ULongLong;
+
+  Pmy_bool = ^my_bool;
+  my_bool = byte;
+
   PUSED_MEM=^USED_MEM;
-  USED_MEM = packed record
+  USED_MEM = record
     next:       PUSED_MEM;
     left:       Integer;
     size:       Integer;
@@ -190,7 +218,7 @@ type
   ERR_PROC = procedure;
 
   PMEM_ROOT = ^MEM_ROOT;
-  MEM_ROOT = packed record
+  MEM_ROOT = record
     free:          PUSED_MEM;
     used:          PUSED_MEM;
     pre_alloc:     PUSED_MEM;
@@ -222,8 +250,8 @@ type
 
   MYSQL_FIELD_OFFSET = UInt;
 
-  PMYSQL_OPTIONS   = ^_MYSQL_OPTIONS;
-  _MYSQL_OPTIONS = record
+  PMYSQL_OPTIONS   = ^TMYSQL_OPTIONS;
+  TMYSQL_OPTIONS = record
     connect_timeout:          UInt;
     read_timeout:             UInt;
     write_timeout:            UInt;
@@ -264,17 +292,14 @@ type
     local_infile_userdata:    Pointer;
   end;
 
-    PZMySQLConnect = Pointer;
-    PZMySQLResult = Pointer;
-    PZMySQLRow = Pointer;
-    PZMySQLField = Pointer;
-    PZMySQLRowOffset = Pointer;
-    PZMySqlPrepStmt = Pointer;
-    PZMysqlBindArray = Pointer;
+  PZMySQLResult = Pointer;
+  PZMySQLRow = Pointer;
+  PZMySQLRowOffset = Pointer;
+  PZMysqlBindArray = Pointer;
 
 { Enum Field Types }
-  PMysqlFieldTypes = ^TMysqlFieldTypes;
-  TMysqlFieldTypes = (
+  PMysqlFieldType = ^TMysqlFieldType;
+  TMysqlFieldType = (
     FIELD_TYPE_DECIMAL   = 0,
     FIELD_TYPE_TINY      = 1,
     FIELD_TYPE_SHORT     = 2,
@@ -312,15 +337,13 @@ type
   TMysqlStmtAttrType = (
     STMT_ATTR_UPDATE_MAX_LENGTH,
     STMT_ATTR_CURSOR_TYPE,
-    STMT_ATTR_PREFETCH_ROWS
+    STMT_ATTR_PREFETCH_ROWS,
+    { mariadb 10.2.7up}
+    STMT_ATTR_PREBIND_PARAMS=200,
+    STMT_ATTR_ARRAY_SIZE,
+    STMT_ATTR_ROW_SIZE
   );
 
-  Tenum_cursor_type = (
-    CURSOR_TYPE_NO_CURSOR   = 0,
-    CURSOR_TYPE_READ_ONLY   = 1,
-    CURSOR_TYPE_FOR_UPDATE  = 2,
-    CURSOR_TYPE_SCROLLABLE  = 4
-  );
   TMysqlShutdownLevel = (
     SHUTDOWN_DEFAULT = 0,
     SHUTDOWN_WAIT_CONNECTIONS = MYSQL_SHUTDOWN_KILLABLE_CONNECT,
@@ -381,7 +404,7 @@ TMYSQL_CLIENT_OPTIONS =
     MYSQL_TIMESTAMP_TIME = 2
   );
 
-  MYSQL_TIME = record
+  TMYSQL_TIME = record
     year:                UInt;
     month:               UInt;
     day:                 UInt;
@@ -389,11 +412,10 @@ TMYSQL_CLIENT_OPTIONS =
     minute:              UInt;
     second:              UInt;
     second_part:         ULong;
-    neg:                 Byte;
+    neg:                 my_bool;
     time_type:           mysql_timestamp_type;
-    padding:             UInt;    //ludob alignment is different? Mysql returns 36 bytes.
   end;
-  PMYSQL_TIME = ^MYSQL_TIME;
+  PMYSQL_TIME = ^TMYSQL_TIME;
 
   PLIST = ^LIST;
   LIST = record
@@ -402,14 +424,16 @@ TMYSQL_CLIENT_OPTIONS =
     data:       Pointer;
   end;
 
-  PMYSQL_FIELD = ^MYSQL_FIELD;
-  MYSQL_FIELD = record
+  PMYSQL_FIELD = Pointer;
+
+  PMYSQL_FIELD51 = ^TMYSQL_FIELD51;
+  TMYSQL_FIELD51 = record
     name:             PAnsiChar;   // Name of column
     org_name:         PAnsiChar;   // Original column name, if an alias
     table:            PAnsiChar;   // Table of column if column was a field
     org_table:        PAnsiChar;   // Org table name if table was an alias
     db:               PAnsiChar;   // Database for table
-    catalog:	        PAnsiChar;   // Catalog for table
+    catalog:          PAnsiChar;   // Catalog for table
     def:              PAnsiChar;   // Default value (set by mysql_list_fields)
     length:           ULong; // Width of column
     max_length:       ULong; // Max width of selected set
@@ -423,16 +447,117 @@ TMYSQL_CLIENT_OPTIONS =
     flags:            UInt; // Div flags
     decimals:         UInt; // Number of decimals in field
     charsetnr:        UInt; // Character set
-    _type:            TMysqlFieldTypes; // Type of field. Se mysql_com.h for types
+    _type:            TMysqlFieldType; // Type of field. Se mysql_com.h for types
+    extension:        Pointer //added in 4.1
   end;
 
-  PMYSQL_BIND41 = ^MYSQL_BIND41;
-  MYSQL_BIND41 =  record
+  PMYSQL_FIELD41 = ^MYSQL_FIELD41;
+  MYSQL_FIELD41 = record
+    name:             PAnsiChar; // Name of column
+    org_name:         PAnsiChar; // Original column name, if an alias
+    table:            PAnsiChar; // Table of column if column was a field
+    org_table:        PAnsiChar; // Org table name if table was an alias
+    db:               PAnsiChar; // Database for table
+    catalog:          PAnsiChar; // Catalog for table
+    def:              PAnsiChar; // Default value (set by mysql_list_fields)
+    length:           ULong; // Width of column
+    max_length:       ULong; // Max width of selected set
+    name_length:      UInt;
+    org_name_length:  UInt;
+    table_length:     UInt;
+    org_table_length: UInt;
+    db_length:        UInt;
+    catalog_length:   UInt;
+    def_length:       UInt;
+    flags:            UInt; // Div flags
+    decimals:         UInt; // Number of decimals in field
+    charsetnr:        UInt; // Character set
+    _type:            TMysqlFieldType;     // Type of field. Se enum_field_types.
+  end;
+  PMYSQL_FIELD401 = ^MYSQL_FIELD401;
+  MYSQL_FIELD401 = record
+    name:             PAnsiChar; // Name of column
+    org_name:         PAnsiChar; // Original column name, if an alias
+    table:            PAnsiChar; // Table of column if column was a field
+    org_table:        PAnsiChar; // Org table name if table was an alias
+    db:               PAnsiChar; // Database for table
+    def:              PAnsiChar; // Default value (set by mysql_list_fields)
+    length:           ULong; // Width of column
+    max_length:       ULong; // Max width of selected set
+    name_length:      UInt;
+    org_name_length:  UInt;
+    table_length:     UInt;
+    org_table_length: UInt;
+    db_length:        UInt;
+    def_length:       UInt;
+    flags:            UInt; // Div flags
+    decimals:         UInt; // Number of decimals in field
+    charsetnr:        UInt; // Character set
+    _type:            TMysqlFieldType;     // Type of field. Se mysql_com.h for types
+  end;
+  PMYSQL_FIELD40 = ^MYSQL_FIELD40;
+  MYSQL_FIELD40 = record
+    name:             PAnsiChar; // Name of column
+    table:            PAnsiChar; // Table of column if column was a field
+    org_table:        PAnsiChar; // Org table name if table was an alias
+    db:               PAnsiChar; // Database for table
+    def:              PAnsiChar; // Default value (set by mysql_list_fields)
+    length:           ULong; // Width of column
+    max_length:       ULong; // Max width of selected set
+    flags:            UInt; // Div flags
+    decimals:         UInt; // Number of decimals in field
+    _type:            TMysqlFieldType;     // Type of field. Se mysql_com.h for types
+  end;
+  PMYSQL_FIELD32 = ^MYSQL_FIELD32;
+  MYSQL_FIELD32 = record
+    name:             PAnsiChar; // Name of column
+    table:            PAnsiChar; // Table of column if column was a field
+    def:              PAnsiChar; // Default value (set by mysql_list_fields)
+    _type:            TMysqlFieldType;     // Type of field. Se mysql_com.h for types
+    length:           UInt; // Width of column
+    max_length:       UInt; // Max width of selected set
+    flags:            UInt; // Div flags
+    decimals:         UInt; // Number of decimals in field
+  end;
+
+  // offsets to used MYSQL_FIELDxx members.
+  // a negative entry means the field does not exits in the record
+  PMYSQL_FIELDOFFSETS = ^TMYSQL_FIELDOFFSETS;
+  TMYSQL_FIELDOFFSETS = record
+    name            : NativeUInt;
+    name_length     : NativeInt;
+    org_table       : NativeInt;
+    org_table_length: NativeInt;
+    org_name        : NativeInt;
+    org_name_length : NativeInt;
+    max_length      : NativeUInt;
+    db              : NativeInt;
+    db_length       : NativeInt;
+    charsetnr       : NativeInt;
+    _type           : NativeUInt;
+    flags           : NativeUInt;
+    length          : NativeUInt;
+    decimals        : NativeUInt;
+  end;
+
+  PMYSQL_BIND041 = ^MYSQL_BIND041;
+  MYSQL_BIND041 = record
+    length: PLongWord;              // output length pointer
+    is_null: Pmy_bool;              // Pointer to null indicators
+    buffer: PByte;                  // buffer to get/put data
+    buffer_type: TMysqlFieldType;  // buffer type
+    buffer_length: LongWord;        // buffer length
+    param_number: LongWord;         // For null count and error messages
+    long_data_used: my_bool;        // If used with mysql_send_long_data
+  end;
+
+  PMYSQL_BIND411 = ^TMYSQL_BIND411;
+  TMYSQL_BIND411 =  record
     // 4.1.22 definition
     length:           PULong;
-    is_null:          PByte;
+    is_null:          Pmy_bool;
     buffer:           Pointer;
-    buffer_type:      TMysqlFieldTypes;
+    buffer_type:      TMysqlFieldType;
     buffer_length:    ULong;
     //internal fields
     inter_buffer:     PByte;
@@ -440,44 +565,44 @@ TMYSQL_CLIENT_OPTIONS =
     internal_length:  ULong;
     param_number:     UInt;
     pack_length:      UInt;
-    is_unsigned:      Byte;
-    long_data_used:   Byte;
-    internal_is_null: Byte;
+    is_unsigned:      my_bool;
+    long_data_used:   my_bool;
+    internal_is_null: my_bool;
     store_param_func: Pointer;
     fetch_result:     Pointer;
     skip_result:      Pointer;
   end;
 
-  PMYSQL_BIND50 = ^MYSQL_BIND50;
-  MYSQL_BIND50 =  record
-    // 5.0.67 definition
+  PMYSQL_BIND506 = ^TMYSQL_BIND506;
+  TMYSQL_BIND506 =  record
+    // 5.0.67 up definition
     length:            PULong;
-    is_null:           PByte;
+    is_null:           Pmy_bool;
     buffer:            Pointer;
     error:             PByte;
-    buffer_type:       TMysqlFieldTypes;
+    buffer_type:       TMysqlFieldType;
     buffer_length:     ULong;
     row_ptr:           PByte;
     offset:            ULong;
     length_value:      ULong;
-    param_number:      UInt;
-    pack_length:       UInt;
-    error_value:       Byte;
-    is_unsigned:       Byte;
-    long_data_used:    Byte;
-    is_null_value:     Byte;
+    param_number:      ULong;
+    pack_length:       ULong;
+    error_value:       my_bool;
+    is_unsigned:       my_bool;
+    long_data_used:    my_bool;
+    is_null_value:     my_bool;
     store_param_funct: Pointer;
     fetch_result:      Pointer;
     skip_result:       Pointer;
   end;
 
-  PMYSQL_BIND51 = ^MYSQL_BIND51;
-  MYSQL_BIND51 =  record
-    // 5.1.30 definition (Still valid for 5.6.25)
+  PMYSQL_BIND51 = ^TMYSQL_BIND51;
+  TMYSQL_BIND51 =  record
+    // 5.1.30 up and 6.x definition
     length:            PULong;
-    is_null:           PByte;
+    is_null:           Pmy_bool;
     buffer:            Pointer;
-    error:             PByte;
+    error:             Pmy_bool;
     row_ptr:           PByte;
     store_param_funct: Pointer;
     fetch_result:      Pointer;
@@ -487,22 +612,26 @@ TMYSQL_CLIENT_OPTIONS =
     length_value:      ULong;
     param_number:      UInt;
     pack_length:       UInt;
-    buffer_type:       TMysqlFieldTypes;
-    error_value:       Byte;
-    is_unsigned:       Byte;
-    long_data_used:    Byte;
-    is_null_value:     Byte;
+    buffer_type:       TMysqlFieldType;
+    error_value:       my_bool;
+    is_unsigned:       my_bool;
+    long_data_used:    my_bool;
+    is_null_value:     my_bool;
     extension:         Pointer;
   end;
 
-  PMYSQL_BIND60 = ^MYSQL_BIND60;
-  MYSQL_BIND60 =  record
-    // 6.0.8 definition
+  PMARIADB_BIND1027 = ^TMARIADB_BIND1027;
+  TMARIADB_BIND1027 =  record
+    // MariaDB 10.2.7 up
     length:            PULong;
-    is_null:           PByte;
+    is_null:           Pmy_bool;
     buffer:            Pointer;
-    error:             PByte;
-    row_ptr:           PByte;
+    error:             Pmy_bool;
+    u:                 record
+                          case Boolean of
+                          False: (row_ptr: PByte);
+                          True: (indicator: PShortInt);
+                        end;
     store_param_funct: Pointer;
     fetch_result:      Pointer;
     skip_result:       Pointer;
@@ -511,42 +640,61 @@ TMYSQL_CLIENT_OPTIONS =
     length_value:      ULong;
     param_number:      UInt;
     pack_length:       UInt;
-    buffer_type:       TMysqlFieldTypes;
-    error_value:       Byte;
-    is_unsigned:       Byte;
-    long_data_used:    Byte;
-    is_null_value:     Byte;
+    buffer_type:       TMysqlFieldType;
+    error_value:       my_bool;
+    is_unsigned:       my_bool;
+    long_data_used:    my_bool;
+    is_null_value:     my_bool;
     extension:         Pointer;
   end;
 
   // offsets to used MYSQL_BINDxx members. Filled by GetBindOffsets
-  MYSQL_BINDOFFSETS = record
+  PMYSQL_BINDOFFSETS = ^TMYSQL_BINDOFFSETS;
+  TMYSQL_BINDOFFSETS = record
     buffer_type   :NativeUint;
     buffer_length :NativeUint;
     is_unsigned   :NativeUint;
     buffer        :NativeUint;
     length        :NativeUint;
     is_null       :NativeUint;
-    size          :integer;    //size of MYSQL_BINDxx
+    Indicator     :NativeUint;
+    size          :word;    //size of MYSQL_BINDxx
   end;
 
-  PDOBindRecord2 = ^TDOBindRecord2;
-  TDOBindRecord2 = record
-    buffer:                 Array of Byte; //data place holder
-    buffer_address:         PPointer; //we don't need reserved mem in all case, but we need to set the address
-    buffer_length_address:  PULong; //set buffer_Length on the fly e.g. lob reading!
-    buffer_type:            TMysqlFieldTypes; //save exact type
-    buffer_type_address:    PMysqlFieldTypes;
-    length:                 ULong; //current length of our or retrieved data
-    is_null:                Byte; //null indicator
+  PULongArray = ^TULongArray;
+  TULongArray = array[0..4095] of Ulong; //https://dev.mysql.com/doc/refman/8.0/en/column-count-limit.html
+
+  Pmy_bool_array = ^Tmy_bool_array;
+  Tmy_bool_array = array[0..High(Byte)] of my_bool; //just 4 debugging
+
+  TIndicator = ShortInt;
+  Pmysql_indicator_types = ^Tmysql_indicator_types;
+  Tmysql_indicator_types = array[0..High(Byte)] of TIndicator;
+
+  PMYSQL_aligned_BIND = ^TMYSQL_aligned_BIND;
+  TMYSQL_aligned_BIND = record
+    buffer:                 Pointer; //data place holder
+    buffer_address:         PPointer; //we don't need reserved mem at all, but we need to set the address
+    buffer_type_address:    PMysqlFieldType;
+    buffer_length_address:  PULong; //address of result buffer length
+    length_address:         PPointer;
+    length:                 PULongArray; //current length of our or bound data
+    is_null_address:        Pmy_bool; //adress of is_null -> the field should be used
+    is_null:                my_bool; //null indicator -> do not attach directly -> out params are referenced to stmt bindings
+    is_unsigned_address:    Pmy_bool; //signed ordinals or not?
+    //https://mariadb.com/kb/en/library/bulk-insert-column-wise-binding/
+    indicators:             Pmysql_indicator_types; //stmt indicators for bulk bulk ops -> mariadb addresses to "u" and does not use the C-enum
+    indicator_address:      PPointer;
+    decimals:               Integer; //count of decimal digits for rounding the doubles
     binary:                 Boolean; //binary field or not? Just for reading!
-    is_signed:              Boolean; //signed ordinals or not? Just for reading!
-    mysql_bind:             Pointer; //Save exact address of bind for lob reading
+    mysql_bind:             Pointer; //Save exact address of bind for lob reading /is used also on writting 4 the lob-buffer-address
+    Iterations:             ULong; //save count of array-Bindings to prevent reallocs for Length and Is_Null-Arrays
   end;
+  PMYSQL_aligned_BINDs = ^TMYSQL_aligned_BINDs;
+  TMYSQL_aligned_BINDs = array[0..High(Byte)] of TMYSQL_aligned_BIND; //just 4 debugging
 
-  PMYSQL = ^MYSQL;
-
-  MYSQL  = pointer;
+  PPMYSQL = ^PMYSQL;
+  PMYSQL  = pointer;
 
   PMY_CHARSET_INFO = ^MY_CHARSET_INFO;
   MY_CHARSET_INFO = record
@@ -569,19 +717,13 @@ TMYSQL_CLIENT_OPTIONS =
     MY_ST_PREPARE,
     MY_ST_EXECUTE);
 
+  PPMYSQL_STMT = ^PMYSQL_STMT;
   PMYSQL_STMT = Pointer;
 
-  PMySQLLengthArray = ^TMySQLLengthArray;
-  TMySQLLengthArray = array[0..0] of Ulong; //http://dev.mysql.com/doc/refman/4.1/en/column-count-limit.html
-
-{ ****************** Plain API Types definition ***************** }
-
+  TMySQLForks = (fMySQL, fMariaDB, fSphinx, fPercona, fDrizzle, WebScaleSQL, OurDelta);
 
 const
-  EMBEDDED_DEFAULT_DATA_DIR = {$IFDEF WIN32}
-                               '.\data\'
-                              {$ELSE} './data/'
-                              {$ENDIF};
+  EMBEDDED_DEFAULT_DATA_DIR = {$IFDEF WINDOWS}'.\data\'{$ELSE}'./data/'{$ENDIF};
   SERVER_ARGUMENTS_KEY_PREFIX = 'ServerArgument';
   SERVER_GROUPS : array [0..2] of PAnsiChar = ('embedded'#0, 'server'#0, nil);
 
@@ -590,9 +732,39 @@ const
                                             '--set-variable=key_buffer_size=32M'#0);
 
 const
-    MaxBlobSize = 1000000;
+  MaxBlobSize = 1000000;
+//some error codes:
+  CR_SERVER_GONE_ERROR = 2006;
+  CR_SERVER_LOST = 2013;
+  CR_INVALID_PARAMETER_NO = 2034;
+  CR_NO_DATA = 2051;
+
+  //http://eclipseclp.org/doc/bips/lib/dbi/cursor_next_execute-3.html
+  //"Only one active cursor of type no_cursor is allowed per session,
+  //and this active cursor must be closed before another query can be issued to the DBMS server.
+  //read_only cursor does not have this restriction,
+  //and several such cursors can be active at the same time "
+
+  CURSOR_TYPE_NO_CURSOR:  ULong = 0;
+  CURSOR_TYPE_READ_ONLY:  ULong = 1;
+  CURSOR_TYPE_FOR_UPDATE: ULong = 2;
+  CURSOR_TYPE_SCROLLABLE: ULong = 4;
+
+{** offet of MYSSQL.server_status field:
+  The struct of the record tends to change to often and we don't need all the
+  definitions
+
+  Value := NativeUInt(@(MYSQLx(Nil).server_status
+}
+
+  MYSQL5up_server_status_offset: NativeUInt = {$IFDEF CPU64}852{$ELSE}748{$ENDIF};
+  MYSQL41_server_status_offset: NativeUInt = {$IFDEF CPU64}540{$ELSE}436{$ENDIF};
+  MYSQL323_server_status_offset: NativeUInt = {$IFDEF CPU64}396{$ELSE}328{$ENDIF};
+
+  //mysql_com.h
+  SERVER_PS_OUT_PARAMS = LongWord(4096); //To mark ResultSet containing output parameter values.
+  SERVER_MORE_RESULTS_EXIST = LongWord(8); //Multi query - next query exists
 
 implementation
-
 
 end.

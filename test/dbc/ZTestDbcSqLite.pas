@@ -108,7 +108,7 @@ begin
   CheckEquals(False, Connection.IsReadOnly);
 //  CheckEquals(True, Connection.IsClosed);
   CheckEquals(True, Connection.GetAutoCommit);
-  CheckEquals(Ord(tiNone), Ord(Connection.GetTransactionIsolation));
+  CheckEquals(Ord(tiSerializable), Ord(Connection.GetTransactionIsolation));
 
   { Checks without transactions. }
   Connection.CreateStatement;
@@ -121,6 +121,7 @@ begin
   { Checks with transactions. }
   Connection.SetTransactionIsolation(tiReadCommitted);
   Connection.CreateStatement;
+  Connection.SetAutoCommit(False);
   CheckEquals(False, Connection.IsClosed);
   Connection.Commit;
   Connection.Rollback;
@@ -510,7 +511,7 @@ begin
     CheckEquals(True, ResultSet.Next); //fetch second row.
     CheckEquals(True, ResultSet.Next); //fetch third row.
     {ignore last row}
-    connection.Commit;
+    //connection.Commit;
   finally
     InsertPreparedStatement.ClearParameters;
     InsertPreparedStatement.ExecuteUpdate('delete from people where p_id=10');

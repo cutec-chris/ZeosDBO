@@ -158,18 +158,19 @@ begin
     try
       Connection.Connect;
       Fail('Incorrect behavior dummy.dll does not exist');
-    except
-      CheckEquals(false,Connection.Connected);
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
+    Check(not Connection.Connected);
     Connection.LibraryLocation:='';
     Connection.Connect;
-    CheckEquals(true,Connection.Connected);
+    Check(Connection.Connected);
 //   {$ifdef fpc}Fail{$else}Status{$endif}('Info: '+Connection.Protocol+
 //          ' Driver version: '+ Connection.ClientVersionStr+
 //          ' Server version: '+ Connection.ServerVersionStr);
   end
   else
-    Check(True);
+    BlankCheck;
 end;
 
 procedure TZTestConnectionCase.ConnLogin(Sender: TObject; var Username:string ; var Password: string);
@@ -182,18 +183,18 @@ procedure TZTestConnectionCase.TestIdentifierQuotes;
 begin
   try
     Connection.Connect;
-    Check(Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString <> '');
+    CheckNotEquals('', Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString);
     Connection.Disconnect;
 
     Connection.Properties.Add('identifier_quotes=');
     Connection.Connect;
-    Check(Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString = '');
+    CheckEquals('', Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString);
     Connection.Disconnect;
     Connection.Properties.Delete(Connection.Properties.IndexOfName('identifier_quotes'));
 
     Connection.Properties.Values['identifier_quotes'] := '{}';
     Connection.Connect;
-    Check(Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString = '{}');
+    CheckEquals('{}', Connection.DbcConnection.GetMetadata.GetDatabaseInfo.GetIdentifierQuoteString);
     Connection.Disconnect;
   finally
     Connection.Properties.Delete(Connection.Properties.IndexOfName('identifier_quotes'));

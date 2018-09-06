@@ -41,10 +41,18 @@
 {********************************************************@}
 // Compilation directives for Lazarus
 
+// Suppress some FPC hints that are known to be false
+{$WARN 4055 off : Conversion between ordinals and pointers is not portable} //suppress compiler buggy warning -> our Native(U)Int is Pointer size aligned
+{$WARN 4056 off : Conversion between ordinals and pointers is not portable}
+{$WARN 6058 off : Call to subroutine "$1" marked as inline is not inlined} //suppress warning that marks all Variant operators f.ex.
+{$WARN 5093 off : function result variable of a managed type does not seem to be initialized} //suppress warning - we suppose all managed types are init'd as empty
+{$WARN 5094 off : function result variable of a managed type does not seem to be initialized}
+{$WARN 5089 off : Local variable "$1" of a managed type does not seem to be initialized}
+{$WARN 5090 off : Variable "$1" of a managed type does not seem to be initialized}
+{$WARN 5091 off : Local variable "$1" of a managed type does not seem to be initialized}
+
 {$DEFINE PUREPASCAL}
 
-{$DEFINE MISS_VARIANTCLEAR}           //oleaut32 external function VariantClear is missing
-{$DEFINE WITH_EARGUMENTEXCEPTION}     // EArgumentException is supported since?????
 {.$DEFINE WITH_VARIANT_UINT64}         // System.TVariant supports UInt64 Values
 {$DEFINE WITH_VARIANT_UNICODESTRING}  // System.TVariant supports UnicodeString Values
 {$DEFINE WITH_TFIELD_FREEBUFFERS}     //TField has virtual FreeBuffers procedure
@@ -53,6 +61,7 @@
 {$DEFINE HAVE_UNKNOWN_CIRCULAR_REFERENCE_ISSUES} //seems FPC behaves different to Delphi. Some weired ref issues arrive if Ancastor units using Descendants in implementation uses section??
 {$DEFINE NEED_TYPED_UINT64_CONSTANTS}
 {$DEFINE WITH_PUREPASCAL_INTPOWER}
+{$DEFINE TFIELD_ASWIDESTRING_IS_WIDESTRING}
 {$IFDEF SYSTEMINLINE} //global FPC define
   {$DEFINE WITH_INLINE}           // compiler supports inline methodes
 {$ENDIF}
@@ -73,9 +82,6 @@
       {$DEFINE OLDFPC}
     {$IFEND}
 
-//    {$IF FPC_FULLVERSION>=20400}  // 2.4.0 status is unknown. 2.4.2+ should be generally fine.
-//      {$DEFINE FPC2_4UP}
-//    {$IFEND}
     {$DEFINE WITH_PARAM_ASLARGEINT} //supportet since FPC 2.0.4 -> see http://zeoslib.sourceforge.net/viewtopic.php?p=68484#p68484
     {$DEFINE WITH_FTWIDESTRING}  // Supported from somewhere between 2.2 and 2.4
 
@@ -95,10 +101,12 @@
        {$DEFINE PWIDECHAR_IS_PUNICODECHAR}
        {$DEFINE WITH_FTGUID} //TStringField descendant TGuidField is supported 
        {$DEFINE FPC2_6UP}
+       {$DEFINE FPC2_6DOWN}
     {$IFEND}
 
-    {$IF FPC_FULLVERSION>=20602}
-       {$DEFINE HAVE_TBYTES}         // TBytes is declared only in FPC 2.6.2 instead of 2.6.0 as declared...
+    {$IF FPC_FULLVERSION>=30000}
+       {$DEFINE FPC3_0UP}
+       {$UNDEF FPC2_6DOWN}
     {$ENDIF}
 
     {$IFDEF LCL}
@@ -122,7 +130,6 @@
     {$UNDEF WITH_FPC_FTTIME_BUG} //seems like the never FPC2.6.2 also have fixed the NativData bug for TTimeFields+TDataSet
   {$ENDIF}
   {$IF FPC_FULLVERSION>20700}       // will be introduced in 2.7+
-    {$DEFINE WITH_TRECORDBUFFER}
     {$ifndef MSEgui} 
       {$DEFINE WITH_TBOOKMARK}        // Have TBookmark
     {$endif}
@@ -131,7 +138,7 @@
     {$UNDEF WITH_FPC_BOF_BUG}
     {$UNDEF WITH_FPC_MODIFIED_BUG}
     {$DEFINE WITH_RAWBYTESTRING}          // Have RawByteString CP $FFFFF
-    {$DEFINE WITH_FPC_STRING_CONVERSATION} //After string conversations to RawByteString like AnsiToUTF8 the results are equal to original value
+    {$DEFINE WITH_FPC_STRING_CONVERSION} //After string conversions to RawByteString like AnsiToUTF8 the results are equal to original value
     {$DEFINE WITH_DEFAULTSYSTEMCODEPAGE}
     {$DEFINE MISS_RBS_SETSTRING_OVERLOAD} //SetString overload for RawByteString is missing
     {$IFNDEF FPC_HAS_BUILTIN_WIDESTR_MANAGER} //Hack for *nix systems where i couldn't locate this define )):
@@ -144,7 +151,10 @@
     {$UNDEF WITH_RAWBYTESTRING_CONVERSION_BUG} //issue seems to be fixed
     {$DEFINE WITH_VIRTUAL_TFIELD_BIND} //TField has procedure Bind(Binding: Boolean);
   {$IFEND}
-
+  {$IF FPC_FULLVERSION>30004} // introduced somewhere after 3.0.4 - these defines make the compile break on every 3.0.4 version in Hudson.
+    {$DEFINE WITH_ASANSISTRING} // TField.AsAnsiString is supported
+    {$DEFINE WITH_ASUTF8STRING} // TFIeld.AsUtf8String is supported
+  {$IFEND}
   // todo
   //   VIRTUALSETFIELDDATA: in nativeformat versions of SETFIELDDATA, inherited wasn't called.
   //                Afaik that methoid is virtual in FPC since December 2006, and there is no comment why

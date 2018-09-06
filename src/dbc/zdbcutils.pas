@@ -54,9 +54,9 @@ unit ZDbcUtils;
 interface
 
 {$I ZDbc.inc}
-
 uses
-  Types, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, Contnrs, TypInfo,
+  Types, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
+  {$IFDEF NO_UNIT_CONTNRS}ZClasses{$ELSE}Contnrs{$ENDIF}, TypInfo,
   ZCompatibility, ZDbcIntfs, ZDbcResultSetMetadata, ZTokenizer, ZVariant;
 
 type
@@ -64,7 +64,18 @@ type
     MatchingGroup: String;
     ChildMatches: TStringDynArray;
   end;
+  PPreparablePrefixTokens = ^TPreparablePrefixTokens;
   TPreparablePrefixTokens = array of TPreparablePrefixToken;
+
+  TRawBuff = record
+    Pos: Word;
+    Buf: array[Byte] of AnsiChar;
+  end;
+
+  TUCS2Buff = record
+    Pos: Word;
+    Buf: array[Byte] of WideChar;
+  end;
 
 {**
   Resolves a connection protocol and raises an exception with protocol
@@ -74,21 +85,6 @@ type
 }
 function ResolveConnectionProtocol(const Url: string;
   const SupportedProtocols: TStringDynArray): string;
-
-{**
-  Resolves a database URL and fills the database connection parameters.
-  @param Url an initial database URL.
-  @param Info an initial info parameters.
-  @param HostName a name of the database host.
-  @param Port a port number.
-  @param Database a database name.
-  @param UserName a name of the database user.
-  @param Password a user's password.
-  @param ResutlInfo a result info parameters.
-}
-procedure ResolveDatabaseUrl(const Url: string; Info: TStrings;
-  var HostName: string; var Port: Integer; var Database: string;
-  var UserName: string; var Password: string; ResultInfo: TStrings);
 
 {**
   Checks is the convertion from one type to another type allowed.
@@ -126,8 +122,12 @@ procedure CopyColumnsInfo(FromList: TObjectList; ToList: TObjectList);
   @param Default a parameter default value.
   @return a parameter value or default if nothing was found.
 }
-function DefineStatementParameter(const Statement: IZStatement; const ParamName: string;
-  const Default: string): string;
+function DefineStatementParameter(const Statement: IZStatement;
+  const ParamName: string; const Default: string): string; overload;
+
+function DefineStatementParameter(const Connection: IZConnection;
+  const StmtInfo: TStrings; const ParamName: string;
+  const Default: string): string; overload;
 
 {**
   ToLikeString returns the given string or if the string is empty it returns '%'
@@ -148,25 +148,21 @@ function GetSQLHexWideString(Value: PAnsiChar; Len: Integer; ODBC: Boolean = Fal
 function GetSQLHexAnsiString(Value: PAnsiChar; Len: Integer; ODBC: Boolean = False): RawByteString;
 function GetSQLHexString(Value: PAnsiChar; Len: Integer; ODBC: Boolean = False): String;
 
-function WideStringStream(const AString: WideString): TStream;
+function TokenizeSQLQueryRaw(const SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
+  const Tokenizer: IZTokenizer; var IsParamIndex: TBooleanDynArray;
+  IsNCharIndex: PBooleanDynArray; ComparePrefixTokens: PPreparablePrefixTokens;
+  var TokenMatchIndex: Integer): TRawByteStringDynArray;
 
-function TokenizeSQLQueryRaw(var SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
-  const Tokenizer: IZTokenizer; var IsParamIndex, IsNCharIndex: TBooleanDynArray;
-  ComparePrefixTokens: TPreparablePrefixTokens; const CompareSuccess: PBoolean;
-  const NeedNCharDetection: Boolean = False): TRawByteStringDynArray;
-
-function TokenizeSQLQueryUni(var SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
-  const Tokenizer: IZTokenizer; var IsParamIndex, IsNCharIndex: TBooleanDynArray;
-  ComparePrefixTokens: TPreparablePrefixTokens; const CompareSuccess: PBoolean;
-  const NeedNCharDetection: Boolean = False): TUnicodeStringDynArray;
+function TokenizeSQLQueryUni(const SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
+  const Tokenizer: IZTokenizer; var IsParamIndex: TBooleanDynArray;
+  IsNCharIndex: PBooleanDynArray; ComparePrefixTokens: PPreparablePrefixTokens;
+  var TokenMatchIndex: Integer): TUnicodeStringDynArray;
 
 function ExtractFields(const FieldNames: string; SepChars: TSysCharSet): TStrings;
 
-{$IF defined(ENABLE_MYSQL) or defined(ENABLE_POSTGRESQL) or defined(ENABLE_INTERBASE)}
 procedure AssignOutParamValuesFromResultSet(const ResultSet: IZResultSet;
   const OutParamValues: TZVariantDynArray; const OutParamCount: Integer;
-  const PAramTypes: array of ShortInt);
-{$IFEND}
+  const PAramTypes: TZParamTypeDynArray);
 
 {**
   GetValidatedTextStream the incoming Stream for his given Memory and
@@ -196,10 +192,21 @@ function ZSQLTypeToBuffSize(SQLType: TZSQLType): Integer;
 
 procedure RaiseUnsupportedParameterTypeException(ParamType: TZSQLType);
 
+function IsNullFromArray(ZArray: PZArray; Index: Cardinal): Boolean;
+
+procedure ToBuff(const Value: RawByteString; var Buf: TRawBuff; var Result: RawByteString); overload;
+procedure ToBuff(Value: Pointer; L: LengthInt; var Buf: TRawBuff; var Result: RawByteString); overload;
+procedure ToBuff(Value: AnsiChar; var Buf: TRawBuff; var Result: RawByteString); overload;
+procedure ToBuff(const Value: ZWideString; var Buf: TUCS2Buff; var Result: ZWideString); overload;
+procedure ToBuff(Value: WideChar; var Buf: TUCS2Buff; var Result: ZWideString); overload;
+
+procedure FlushBuff(var Buf: TRawBuff; var Result: RawByteString); overload;
+procedure FlushBuff(var Buf: TUCS2Buff; var Result: ZWideString); overload;
+
 implementation
 
 uses ZMessages, ZSysUtils, ZEncoding, ZFastCode, ZGenericSqlToken,
-  ZConnProperties, ZDbcProperties;
+  ZConnProperties {$IFNDEF NO_UNIT_CONTNRS}, ZClasses{$ENDIF};
 
 {**
   Resolves a connection protocol and raises an exception with protocol
@@ -244,54 +251,6 @@ begin
 end;
 
 {**
-  Resolves a database URL and fills the database connection parameters.
-  @param Url an initial database URL.
-  @param Info an initial info parameters.
-  @param HostName a name of the database host.
-  @param Port a port number.
-  @param Database a database name.
-  @param UserName a name of the database user.
-  @param Password a user's password.
-  @param ResutlInfo a result info parameters.
-}
-procedure ResolveDatabaseUrl(const Url: string; Info: TStrings;
-  var HostName: string; var Port: Integer; var Database: string;
-  var UserName: string; var Password: string; ResultInfo: TStrings);
-var
-  Temp: string;
-begin
-   { assign URL first -> define all out out params }
-   {A correct builded URL exports all these Params if they are expected!}
-  DriverManager.ResolveDatabaseUrl(URL, HostName, Port, DataBase, UserName, Password, ResultInfo);
-
-  { Retrieves non special-escaped-parameters }
-  Temp := Url;
-  while FirstDelimiter('?', Temp) > 0 do //Get all aditional Parameters
-    Temp := Copy(Temp, FirstDelimiter('?', Temp)+1, Length(Temp));
-  PutSplitString(ResultInfo, Temp, ';'); //overrides all Strings
-  ResultInfo.Text := StringReplace(ResultInfo.Text, #9, ';', [rfReplaceAll]); //unescape the #9 char
-
-  if Assigned(Info) then //isn't that strange? (Shouldn't we pick out double-values?)
-    Resultinfo.AddStrings(Info);//All possible PWD/Password and UID/UserName are aviable now, but for what? And the can also be doubled!
-
-  { Redefines user name if not avialble in the URL}
-  if UserName = '' then //Priority 1: URL.UserName
-  begin
-    UserName := ResultInfo.Values[ConnProps_UID]; //Priority 2: Info-UID
-    if UserName = '' then
-      UserName := ResultInfo.Values[ConnProps_Username]; //Priority 3: Info-username
-  end;
-
-  { Redefines user password if not avialble in the URL }
-  if Password = '' then //Priority 1: URL.Password
-  begin
-    Password := ResultInfo.Values[ConnProps_PWD]; //Priority 2: Info-PWD
-    if Password = '' then
-      Password := ResultInfo.Values[ConnProps_Password]; //Priority 3: Info-password
-  end;
-end;
-
-{**
   Checks is the convertion from one type to another type allowed.
   @param InitialType an initial data type.
   @param ResultType a result data type.
@@ -327,6 +286,8 @@ begin
       Result := InitialType in [stString, stUnicodeString, stTime, stTimestamp, stDouble];
     stBinaryStream:
       Result := (InitialType in [stBinaryStream, stBytes]) and (InitialType <> stUnknown);
+    stAsciiStream, stUnicodeStream:
+      Result := (InitialType in [stString, stUnicodeString, stAsciiStream, stUnicodeStream]) and (InitialType <> stUnknown);
     else
       Result := (ResultType = InitialType) and (InitialType <> stUnknown);
   end;
@@ -439,6 +400,19 @@ begin
     Result := Default;
 end;
 
+function DefineStatementParameter(const Connection: IZConnection;
+  const StmtInfo: TStrings; const ParamName: string;
+  const Default: string): string;
+begin
+  Result := '';
+  if StmtInfo <> nil then
+    Result := StmtInfo.Values[ParamName];
+  if (Result = '') then
+    Result := Connection.GetParameters.Values[ParamName];
+  if Result = '' then
+    Result := Default;
+end;
+
 {**
   ToLikeString returns the given string or if the string is empty it returns '%'
   @param Value the string
@@ -467,20 +441,20 @@ begin
   ZSetString(nil, ((Len+1) shl 1)+Ord(not Odbc), Result{%H-});
   if ODBC then begin
     P := Pointer(Result);
-    P^ := '0';
-    (P+1)^ := 'x';
+    Word(P^) := Ord('0');
+    Word((P+1)^) := Ord('x');
     Inc(P, 2);
     if (Value <> nil) and (Len > 0)then
       ZBinToHex(Value, P, Len);
   end else begin
     P := Pointer(Result);
-    P^ := 'x';
-    (P+1)^ := #39;
+    Word(P^) := Ord('x');
+    Word((P+1)^) := Ord(#39);
     Inc(P,2);
     if (Value <> nil) and (Len > 0)then
       ZBinToHex(Value, P, Len);
     Inc(P, Len shl 1); //shl 1 = * 2 but faster
-    P^ := #39;
+    Word(P^) := Word(#39);
   end;
 end;
 
@@ -490,20 +464,20 @@ begin
   ZSetString(nil, ((Len+1) shl 1)+Ord(not Odbc), Result{%H-});
   if ODBC then begin
     P := Pointer(Result);
-    P^ := '0';
-    (P+1)^ := 'x';
+    Byte(P^) := Ord('0');
+    Byte((P+1)^) := Ord('x');
     Inc(P, 2);
     if (Value <> nil) and (Len > 0)then
       ZBinToHex(Value, P, Len);
   end else begin
     P := Pointer(Result);
-    P^ := 'x';
-    (P+1)^ := #39;
+    Byte(P^) := Ord('x');
+    Byte((P+1)^) :=Ord(#39);
     Inc(P,2);
     if (Value <> nil) and (Len > 0)then
       ZBinToHex(Value, P, Len);
     Inc(P, Len shl 1); //shl 1 = * 2 but faster
-    P^ := #39;
+    Byte(P^) := Ord(#39);
   end;
 end;
 
@@ -516,26 +490,22 @@ begin
   {$ENDIF}
 end;
 
-function WideStringStream(const AString: WideString): TStream;
-begin
-  Result := TMemoryStream.Create;
-  Result.Write(PWideChar(AString)^, Length(AString)*2);
-  Result.Position := 0;
-end;
-
 {**
   Splits a SQL query into a list of sections.
   @returns a list of splitted sections.
 }
-function TokenizeSQLQueryRaw(var SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
-  const Tokenizer: IZTokenizer; var IsParamIndex, IsNCharIndex: TBooleanDynArray;
-  ComparePrefixTokens: TPreparablePrefixTokens; const CompareSuccess: PBoolean;
-  const NeedNCharDetection: Boolean = False): TRawByteStringDynArray;
+function TokenizeSQLQueryRaw(const SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
+  const Tokenizer: IZTokenizer; var IsParamIndex: TBooleanDynArray;
+  IsNCharIndex: PBooleanDynArray; ComparePrefixTokens: PPreparablePrefixTokens;
+  var TokenMatchIndex: Integer): TRawByteStringDynArray;
 var
-  I, C, N: Integer;
-  Temp: RawByteString;
+  I, C, N, FirstComposePos: Integer;
   NextIsNChar, ParamFound: Boolean;
-  Tokens: TZTokenDynArray;
+  Tokens: TZTokenList;
+  {$IFNDEF UNICODE}
+  Tmp: String;
+  List: TStrings;
+  {$ENDIF}
 
   procedure Add(const Value: RawByteString; const Param: Boolean = False);
   begin
@@ -543,89 +513,90 @@ var
     Result[High(Result)] := Value;
     SetLength(IsParamIndex, Length(Result));
     IsParamIndex[High(IsParamIndex)] := Param;
-    SetLength(IsNCharIndex, Length(Result));
-    if Param and NextIsNChar then
-    begin
-      IsNCharIndex[High(IsNCharIndex)] := True;
-      NextIsNChar := False;
-    end
-    else
-      IsNCharIndex[High(IsNCharIndex)] := False;
+    if IsNCharIndex <> nil then begin
+      SetLength(IsNCharIndex^, Length(Result));
+      if Param and NextIsNChar then
+      begin
+        IsNCharIndex^[High(IsNCharIndex^)] := True;
+        NextIsNChar := False;
+      end else
+        IsNCharIndex^[High(IsNCharIndex^)] := False;
+    end;
   end;
 begin
   ParamFound := (ZFastCode.{$IFDEF USE_FAST_CHARPOS}CharPos{$ELSE}Pos{$ENDIF}('?', SQL) > 0);
-  if ParamFound or ConSettings^.AutoEncode or Assigned(ComparePrefixTokens) then
-  begin
-    Tokens := Tokenizer.TokenizeBuffer(SQL, [toSkipEOF]);
-    Temp := '';
-    SQL := '';
-    NextIsNChar := False;
-    N := -1;
-    CompareSuccess^ := False;
-    for I := 0 to High(Tokens) do
-    begin
-      {check if we've a preparable statement. If ComparePrefixTokens = nil then
-        comparing is not required or already done }
-      if (Tokens[I].TokenType = ttWord) and Assigned(ComparePrefixTokens) then
-        if N = -1 then
-        begin
-          for C := 0 to high(ComparePrefixTokens) do
-            if ComparePrefixTokens[C].MatchingGroup = UpperCase(Tokens[I].Value) then
-            begin
-              if Length(ComparePrefixTokens[C].ChildMatches) = 0 then
-                CompareSuccess^ := True
-              else
-                N := C; //save group
-              Break;
-            end;
-          if N = -1 then //no sub-tokens ?
+  if ParamFound {$IFNDEF UNICODE}or ConSettings^.AutoEncode {$ENDIF}or Assigned(ComparePrefixTokens) then begin
+    Tokens := Tokenizer.TokenizeBufferToList(SQL, [toSkipEOF]);
+    {$IFNDEF UNICODE}
+    if ConSettings^.AutoEncode
+    then List := TStringList.Create
+    else List := nil; //satisfy compiler
+    {$ENDIF}
+    try
+      NextIsNChar := False;
+      N := -1;
+      FirstComposePos := 0;
+      TokenMatchIndex := -1;
+      for I := 0 to Tokens.Count -1 do begin
+        {check if we've a preparable statement. If ComparePrefixTokens = nil then
+          comparing is not required or already done }
+        if (Tokens[I].TokenType = ttWord) and Assigned(ComparePrefixTokens) then
+          if N = -1 then begin
+            for C := 0 to high(ComparePrefixTokens^) do
+              if Tokens.IsEqual(I, ComparePrefixTokens^[C].MatchingGroup,  tcInsensitive) then begin
+                if Length(ComparePrefixTokens^[C].ChildMatches) = 0
+                then TokenMatchIndex := C
+                else N := C; //save group
+                Break;
+              end;
+            if N = -1 then //no sub-tokens ?
+              ComparePrefixTokens := nil; //stop compare sequence
+          end else begin //we already got a group
+            for C := 0 to high(ComparePrefixTokens^[N].ChildMatches) do
+              if Tokens.IsEqual(I, ComparePrefixTokens^[N].ChildMatches[C], tcInsensitive) then begin
+                TokenMatchIndex := N;
+                Break;
+              end;
             ComparePrefixTokens := nil; //stop compare sequence
-        end
-        else
-        begin //we already got a group
-          for C := 0 to high(ComparePrefixTokens[N].ChildMatches) do
-            if ComparePrefixTokens[N].ChildMatches[C] = UpperCase(Tokens[I].Value) then
-            begin
-              CompareSuccess^ := True;
-              Break;
-            end;
-          ComparePrefixTokens := nil; //stop compare sequence
-        end;
-      SQL := SQL + Tokens[I].Value;
-      if ParamFound and (Tokens[I].Value = '?') then
-      begin
-        Add(Temp);
-        Add('?', True);
-        Temp := '';
-      end
-      else
-        if ParamFound and NeedNCharDetection and (Tokens[I].Value = 'N') and
-          (Length(Tokens) > i) and (Tokens[i+1].Value = '?') then
-        begin
-          Add(Temp);
-          Add('N');
-          Temp := '';
-          NextIsNChar := True;
-        end
-        else
-          case (Tokens[i].TokenType) of
-            ttEscape:
-              Temp := Temp +
-                {$IFDEF UNICODE}
-                ConSettings^.ConvFuncs.ZStringToRaw(Tokens[i].Value,
-                  ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP);
-                {$ELSE}
-                Tokens[i].Value;
-                {$ENDIF}
-            ttQuoted, ttComment,
-            ttWord, ttQuotedIdentifier, ttKeyword:
-              Temp := Temp + ConSettings^.ConvFuncs.ZStringToRaw(Tokens[i].Value, ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP)
-            else
-              Temp := Temp + {$IFDEF UNICODE}UnicodeStringToASCII7{$ENDIF}(Tokens[i].Value);
           end;
+      if ParamFound and Tokens.IsEqual(I, Char('?')) then begin
+        if (FirstComposePos < Tokens.Count-1) then
+          {$IFDEF UNICODE}
+          Add(ZUnicodeToRaw(Tokens.AsString(FirstComposePos, I-1), ConSettings^.ClientCodePage^.CP));
+          {$ELSE}
+          Add(Tokens.AsString(FirstComposePos, I-1));
+          {$ENDIF}
+          {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
+          Add(ZUnicodeToRaw(Tokens.AsString(I, I), ConSettings^.ClientCodePage^.CP));
+          {$ELSE}
+          Add('?', True);
+          {$ENDIF}
+          FirstComposePos := i +1;
+        end else if ParamFound and (IsNCharIndex<> nil) and Tokens.IsEqual(I, Char('N')) and
+            (Tokens.Count > i) and Tokens.IsEqual(i+1, Char('?')) then
+          NextIsNChar := True
+        {$IFNDEF UNICODE}
+        else if ConSettings.AutoEncode then
+          case (Tokens[i].TokenType) of
+            ttQuoted, ttComment,
+            ttWord, ttQuotedIdentifier: with Tokens[i]^ do begin
+              Tmp := ConSettings^.ConvFuncs.ZStringToRaw(Tokens.AsString(i), ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP);
+              P := Pointer(tmp);
+              L := Length(tmp);
+              List.Add(Tmp); //keep alive
+            end;
+        end
+        {$ENDIF};
+      end;
+      if (FirstComposePos <= Tokens.Count-1) then
+        Add(ConSettings^.ConvFuncs.ZStringToRaw(Tokens.AsString(FirstComposePos, Tokens.Count -1), ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP));
+    finally
+      Tokens.Free;
+      {$IFNDEF UNICODE}
+      if ConSettings^.AutoEncode then
+        List.Free;
+      {$ENDIF}
     end;
-    if (Temp <> '') then
-      Add(Temp);
   end
   else
     Add(ConSettings^.ConvFuncs.ZStringToRaw(SQL, ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP));
@@ -635,13 +606,13 @@ end;
   Splits a SQL query into a list of sections.
   @returns a list of splitted sections.
 }
-function TokenizeSQLQueryUni(var SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
-  const Tokenizer: IZTokenizer; var IsParamIndex, IsNCharIndex: TBooleanDynArray;
-  ComparePrefixTokens: TPreparablePrefixTokens; const CompareSuccess: PBoolean;
-  const NeedNCharDetection: Boolean = False): TUnicodeStringDynArray;
+function TokenizeSQLQueryUni(const SQL: {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString{$ELSE}String{$IFEND}; Const ConSettings: PZConSettings;
+  const Tokenizer: IZTokenizer; var IsParamIndex: TBooleanDynArray;
+  IsNCharIndex: PBooleanDynArray; ComparePrefixTokens: PPreparablePrefixTokens;
+  var TokenMatchIndex: Integer): TUnicodeStringDynArray;
 var
   I, C, N: Integer;
-  Tokens: TZTokenDynArray;
+  Tokens: TZTokenList;
   Temp: ZWideString;
   NextIsNChar, ParamFound: Boolean;
   procedure Add(const Value: ZWideString; Const Param: Boolean = False);
@@ -650,85 +621,80 @@ var
     Result[High(Result)] := Value;
     SetLength(IsParamIndex, Length(Result));
     IsParamIndex[High(IsParamIndex)] := Param;
-    SetLength(IsNCharIndex, Length(Result));
-    if Param and NextIsNChar then
-    begin
-      IsNCharIndex[High(IsNCharIndex)] := True;
-      NextIsNChar := False;
-    end
-    else
-      IsNCharIndex[High(IsNCharIndex)] := False;
+    if IsNCharIndex <> nil then begin
+      SetLength(IsNCharIndex^, Length(Result));
+      if Param and NextIsNChar then
+      begin
+        IsNCharIndex^[High(IsNCharIndex^)] := True;
+        NextIsNChar := False;
+      end
+      else
+        IsNCharIndex^[High(IsNCharIndex^)] := False;
+    end;
   end;
 begin
   ParamFound := (ZFastCode.{$IFDEF USE_FAST_CHARPOS}CharPos{$ELSe}Pos{$ENDIF}('?', SQL) > 0);
   if ParamFound or ConSettings^.AutoEncode or Assigned(ComparePrefixTokens) then
   begin
-    Tokens := Tokenizer.TokenizeBuffer(SQL, [toSkipEOF]);
-
-    Temp := '';
-    SQL := '';
-    NextIsNChar := False;
-    N := -1;
-    for I := 0 to High(Tokens) do
-    begin
-      {check if we've a preparable statement. If ComparePrefixTokens = nil then
-        comparing is not required or already done }
-      if (Tokens[I].TokenType = ttWord) and Assigned(ComparePrefixTokens) then
-        if N = -1 then
-        begin
-          for C := 0 to high(ComparePrefixTokens) do
-            if ComparePrefixTokens[C].MatchingGroup = UpperCase(Tokens[I].Value) then
-            begin
-              if Length(ComparePrefixTokens[C].ChildMatches) = 0 then
-                CompareSuccess^ := True
-              else
-                N := C; //save group
-              Break;
-            end;
-          if N = -1 then //no sub-tokens ?
+    Tokens := Tokenizer.TokenizeBufferToList(SQL, [toSkipEOF]);
+    try
+      Temp := '';
+      NextIsNChar := False;
+      N := -1;
+      TokenMatchIndex := -1;
+      for I := 0 to Tokens.Count -1 do begin
+        {check if we've a preparable statement. If ComparePrefixTokens = nil then
+          comparing is not required or already done }
+        if (Tokens[I].TokenType = ttWord) and Assigned(ComparePrefixTokens) then
+          if N = -1 then begin
+            for C := 0 to high(ComparePrefixTokens^) do
+              if Tokens.IsEqual(I, ComparePrefixTokens^[C].MatchingGroup, tcInsensitive) then begin
+                if Length(ComparePrefixTokens^[C].ChildMatches) = 0 then
+                  TokenMatchIndex := C
+                else
+                  N := C; //save group
+                Break;
+              end;
+            if N = -1 then //no sub-tokens ?
+              ComparePrefixTokens := nil; //stop compare sequence
+          end else begin //we already got a group
+            for C := 0 to high(ComparePrefixTokens^[N].ChildMatches) do
+              if Tokens.IsEqual(I, ComparePrefixTokens^[N].ChildMatches[C], tcInsensitive) then
+              begin
+                TokenMatchIndex := N;
+                Break;
+              end;
             ComparePrefixTokens := nil; //stop compare sequence
-        end
-        else
-        begin //we already got a group
-          for C := 0 to high(ComparePrefixTokens[N].ChildMatches) do
-            if ComparePrefixTokens[N].ChildMatches[C] = UpperCase(Tokens[I].Value) then
-            begin
-              CompareSuccess^ := True;
-              Break;
-            end;
-          ComparePrefixTokens := nil; //stop compare sequence
-        end;
-      SQL := SQL + Tokens[I].Value;
-      if ParamFound and (Tokens[I].Value = '?') then
-      begin
-        Add(Temp);
-        Add('?', True);
-        Temp := '';
-      end
-      else
-        if ParamFound and NeedNCharDetection and (Tokens[I].Value = 'N') and
-          (Length(Tokens) > i) and (Tokens[i+1].Value = '?') then
+          end;
+        if ParamFound and Tokens.IsEqual(I, Char('?')) then
         begin
           Add(Temp);
-          Add('N');
+          Add('?', True);
           Temp := '';
-          NextIsNChar := True;
         end
         else
-          {$IFDEF UNICODE}
-          Temp := Temp + Tokens[i].Value;
-          {$ELSE}
-          case (Tokens[i].TokenType) of
-            ttEscape, ttQuoted, ttComment,
-            ttWord, ttQuotedIdentifier, ttKeyword:
-              Temp := Temp + ConSettings^.ConvFuncs.ZStringToUnicode(Tokens[i].Value, ConSettings^.CTRL_CP)
-            else
-              Temp := Temp + ASCII7ToUnicodeString(Tokens[i].Value);
-          end;
-          {$ENDIF}
+          if ParamFound and (IsNCharIndex <> nil) and Tokens.IsEqual(I, Char('N')) and
+            (Tokens.Count > i) and Tokens.IsEqual(I+1, Char('?')) then
+          begin
+            Add(Temp);
+            Add('N');
+            Temp := '';
+            NextIsNChar := True;
+          end
+          else
+            case (Tokens[i].TokenType) of
+              ttQuoted, ttComment,
+              ttWord, ttQuotedIdentifier, ttKeyword:
+                Temp := Temp + ConSettings^.ConvFuncs.ZStringToUnicode(Tokens.AsString(i), ConSettings^.CTRL_CP)
+              else
+                Temp := Temp + {$IFNDEF UNICODE}ASCII7ToUnicodeString{$ENDIF}(Tokens.AsString(i));
+            end;
+      end;
+      if (Temp <> '') then
+        Add(Temp);
+    finally
+      Tokens.Free;
     end;
-    if (Temp <> '') then
-      Add(Temp);
   end
   else
     {$IFDEF UNICODE}
@@ -750,41 +716,40 @@ end;
 }
 function ExtractFields(const FieldNames: string; SepChars: TSysCharSet): TStrings;
 var
-  TokenType: TZTokenType;
-  TokenValue: string;
-
+  Token: PZToken;
+  Tokenizer: IZTokenizer;
   procedure RaiseTokenExc;
   begin
-    raise EZSQLException.Create(Format('Unexpected token "%s" in string "%s"', [TokenValue, FieldNames]));
+    FreeAndNil(Result);
+    raise EZSQLException.Create(Format('Unexpected token "%s" in string "%s"', [TokenAsString(Token^), FieldNames]));
   end;
 
 var
-  Tokens: TStrings;
+  Tokens: TZTokenList;
   I: Integer;
   ExpectToken: TZTokenType;
 begin
   ExpectToken := ttWord;
-  Tokens := (TZGenericSQLTokenizer.Create as IZTokenizer).TokenizeBufferToList(FieldNames,
-    [toSkipEOF, toSkipWhitespaces, toDecodeStrings]);
+  Tokenizer := TZGenericSQLTokenizer.Create;
+  Tokens := Tokenizer.TokenizeBufferToList(FieldNames,
+    [toSkipEOF, toSkipWhitespaces]);
   Result := TStringList.Create;
 
-  try try
-    for I := 0 to Tokens.Count - 1 do
-    begin
-      TokenType := TZTokenType(Tokens.Objects[I]);
-      TokenValue := Tokens[I];
-      if TokenType <> ExpectToken then
+  try
+    for I := 0 to Tokens.Count - 1 do begin
+      Token := Tokens[I];
+      if Token.TokenType <> ExpectToken then
         RaiseTokenExc;
 
-      case TokenType of
+      case Token.TokenType of
         ttWord:
           begin
-            Result.Add(TokenValue);
+            Result.Add(Tokenizer.GetQuoteState.DecodeToken(Token^, Token.P^));
             ExpectToken := ttSymbol;
           end;
         ttSymbol:
           begin
-            if not CharInSet(TokenValue[1], SepChars) then
+            if not CharInSet(Token.p^, SepChars) then
               RaiseTokenExc;
             ExpectToken := ttWord;
           end;
@@ -792,19 +757,14 @@ begin
           RaiseTokenExc;
       end;
     end;
-  except
-    FreeAndNil(Result);
-    raise;
-  end;
   finally
     Tokens.Free;
   end;
 end;
 
-{$IF defined(ENABLE_MYSQL) or defined(ENABLE_POSTGRESQL) or defined(ENABLE_INTERBASE) or defined(EANABLE_ASA)}
 procedure AssignOutParamValuesFromResultSet(const ResultSet: IZResultSet;
   const OutParamValues: TZVariantDynArray; const OutParamCount: Integer;
-  const ParamTypes: array of ShortInt);
+  const ParamTypes: TZParamTypeDynArray);
 var
   ParamIndex, I: Integer;
   HasRows: Boolean;
@@ -819,7 +779,7 @@ begin
   Meta := ResultSet.GetMetadata;
   for ParamIndex := 0 to OutParamCount - 1 do
   begin
-    if not (ParamTypes[ParamIndex] in [2, 3, 4]) then // ptOutput, ptInputOutput, ptResult
+    if not (ParamTypes[ParamIndex] in [zptOutput, zptInputOutput, zptResult]) then
       Continue;
     if I > Meta.GetColumnCount {$IFDEF GENERIC_INDEX}-1{$ENDIF} then
       Break;
@@ -875,7 +835,6 @@ begin
   end;
   if SupportsMoveAbsolute then ResultSet.BeforeFirst;
 end;
-{$IFEND}
 
 function TestEncoding(const Bytes: TByteDynArray; const Size: Cardinal;
   const ConSettings: PZConSettings): TZCharEncoding;
@@ -914,7 +873,6 @@ end;
   @param Stream the Stream with the unknown format and data
   @return a valid utf8 encoded stringstram
 }
-{$WARNINGS OFF}
 function GetValidatedAnsiStringFromBuffer(const Buffer: Pointer; Size: Cardinal;
   ConSettings: PZConSettings): RawByteString;
 var
@@ -923,7 +881,7 @@ var
   Encoding: TZCharEncoding;
 begin
   if Size = 0 then
-    Result := ''
+    Result := EmptyRaw
   else
   begin
     SetLength(Bytes, Size +2);
@@ -949,7 +907,7 @@ begin
               US := PRawToUnicode(Buffer, Size, ZOSCodePage)
           else
             US := PRawToUnicode(Buffer, Size, ConSettings.CTRL_CP);
-          Result := UTF8Encode(US);
+          Result := ZUnicodeToRaw(US, zCP_UTF8);
         end;
       ceUTF8:
         if (ConSettings.ClientCodePage.Encoding in [ceAnsi, ceUTF16]) then begin//ansi expected
@@ -965,7 +923,7 @@ begin
       ceUTF16:
         begin
           SetLength(US, Size shr 1);
-          {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buffer^, US[1], Size);
+          {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buffer^, Pointer(US)^, Size);
           if ConSettings.ClientCodePage.Encoding = ceAnsi then
             {$IFDEF WITH_LCONVENCODING}
             Result := Consettings.PlainConvertFunc(UTF8Encode(US))
@@ -973,14 +931,13 @@ begin
             Result := ZUnicodeToRaw(US, ConSettings.ClientCodePage.CP)
             {$ENDIF}
           else
-            Result := UTF8Encode(US);
+            Result := ZUnicodeToRaw(US, zCP_UTF8);
         end;
       else
-        Result := '';
+        Result := EmptyRaw;
     end;
   end;
 end;
-{$WARNINGS ON}
 
 function GetValidatedAnsiStringFromBuffer(const Buffer: Pointer; Size: Cardinal;
   ConSettings: PZConSettings; ToCP: Word): RawByteString;
@@ -1005,7 +962,7 @@ begin
       Result := ZUnicodeToRaw(ZRawToUnicode(Ansi, ConSettings^.ClientCodePage^.CP), ConSettings^.CTRL_CP)
       {$ENDIF}
   else
-    Result := ''; // not done yet  and not needed. Makes the compiler happy
+    Result := EmptyRaw; // not done yet  and not needed. Makes the compiler happy
 end;
 
 {**
@@ -1017,7 +974,6 @@ end;
 function GetValidatedUnicodeStream(const Buffer: Pointer; Size: Cardinal;
   ConSettings: PZConSettings; FromDB: Boolean): TStream;
 var
-  Len: Integer;
   US: ZWideString;
   Bytes: TByteDynArray;
   Encoding: TZCharEncoding;
@@ -1049,14 +1005,8 @@ begin
       end;
     end;
 
-    Len := Length(US) shl 1;
-    if not Assigned(Result) and (Len > 0) then
-    begin
-      Result := TMemoryStream.Create;
-      Result.Size := Len;
-      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(US)^, TMemoryStream(Result).Memory^, Len);
-      Result.Position := 0;
-    end;
+    if US <> '' then
+      Result := StreamFromData(US);
   end;
 end;
 
@@ -1083,5 +1033,224 @@ begin
   raise EZSQLException.Create(SUnsupportedParameterType + ': ' + TypeName);
 end;
 
+function IsNullFromArray(ZArray: PZArray; Index: Cardinal): Boolean;
+begin
+  Result := False;
+  if (ZArray <> nil) and (ZArray^.VIsNullArray <> nil)  then
+    case TZSQLType(ZArray.VIsNullArrayType) of
+        stBoolean: IsNullFromArray := TBooleanDynArray(ZArray^.VIsNullArray)[Index];
+        stByte: IsNullFromArray := TByteDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stShort: IsNullFromArray := TShortIntDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stWord: IsNullFromArray := TWordDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stSmall: IsNullFromArray := TSmallIntDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stLongWord: IsNullFromArray := TLongWordDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stInteger: IsNullFromArray := TIntegerDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stLong: IsNullFromArray := TInt64DynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stULong: IsNullFromArray := TUInt64DynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stFloat: IsNullFromArray := TSingleDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stDouble: IsNullFromArray := TDoubleDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stCurrency: IsNullFromArray := TCurrencyDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stBigDecimal: IsNullFromArray := TExtendedDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stString, stUnicodeString:
+            case ZArray^.VIsNullArrayVariantType of
+              {$IFNDEF UNIOCDE}
+              vtString,
+              {$ENDIF}
+              {$IFNDEF NO_ANSISTRING}
+              vtAnsiString,
+              {$ENDIF}
+              {$IFNDEF NO_UTF8STRING}
+              vtUTF8String,
+              {$ENDIF}
+              vtRawByteString: IsNullFromArray := StrToBoolEx(TRawByteStringDynArray(ZArray^.VIsNullArray)[Index]);
+              {$IFDEF UNIOCDE}
+              vtString,
+              {$ENDIF}
+              vtUnicodeString: IsNullFromArray := StrToBoolEx(TUnicodeStringDynArray(ZArray^.VIsNullArray)[Index]);
+              vtCharRec:
+                if ZCompatibleCodePages(TZCharRecDynArray(ZArray^.VIsNullArray)[Index].CP, zCP_UTF16)
+                then IsNullFromArray := StrToBoolEx(PWideChar(TZCharRecDynArray(ZArray^.VIsNullArray)[Index].P))
+                else IsNullFromArray := StrToBoolEx(PAnsiChar(TZCharRecDynArray(ZArray^.VIsNullArray)[Index].P));
+              vtNull: IsNullFromArray := True;
+              else
+                raise Exception.Create('Unsupported String Variant');
+            end;
+        stBytes:
+          IsNullFromArray := TBytesDynArray(ZArray^.VIsNullArray)[Index] = nil;
+        stDate, stTime, stTimestamp:
+          IsNullFromArray := TDateTimeDynArray(ZArray^.VIsNullArray)[Index] <> 0;
+        stAsciiStream,
+        stUnicodeStream,
+        stBinaryStream:
+          IsNullFromArray := TInterfaceDynArray(ZArray^.VIsNullArray)[Index] = nil;
+        else
+          raise EZSQLException.Create(SUnsupportedParameterType);
+      end
+end;
+
+procedure ToBuff(const Value: RawByteString; var Buf: TRawBuff; var Result: RawByteString); overload;
+var
+  P: PAnsiChar;
+  L, LRes: LengthInt;
+begin
+  L := Length(Value){$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}-1{$ENDIF};
+  if L <= 0 then Exit;
+  if L <= (SizeOf(Buf.Buf)-Buf.Pos) then begin
+    P := Pointer(Value);
+    if L = 1 //happens very often (comma,space etc) -> worth it the check
+    then Buf.Buf[Buf.Pos] := AnsiChar(P^)
+    else {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, Buf.Buf[Buf.Pos], L);
+    Inc(Buf.Pos, L);
+  end else begin
+    LRes := Length(Result)+Buf.Pos+L;
+    SetLength(Result, LRes{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}+1{$ENDIF});
+    {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
+    PByte(P+LRes)^ := Ord(#0);
+    {$ENDIF}
+    P := Pointer(Result);
+    Inc(P, LRes-Buf.Pos-L);
+    if Buf.Pos > 0 then begin
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos);
+      Inc(P, Buf.Pos);
+      Buf.Pos := 0;
+    end;
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, P^, L);
+  end;
+end;
+
+procedure ToBuff(Value: Pointer; L: LengthInt; var Buf: TRawBuff; var Result: RawByteString); overload;
+var
+  P: PAnsiChar;
+  LRes: LengthInt;
+begin
+  if L <= 0 then Exit;
+  if L <= (SizeOf(Buf.Buf)-Buf.Pos) then begin
+    P := Pointer(Value);
+    if L = 1 //happens very often (comma,space etc) -> worth it the check
+    then Buf.Buf[Buf.Pos] := AnsiChar(P^)
+    else {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, Buf.Buf[Buf.Pos], L);
+    Inc(Buf.Pos, L);
+  end else begin
+    LRes := Length(Result)+Buf.Pos+L;
+    SetLength(Result, LRes{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}+1{$ENDIF});
+    {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
+    PByte(P+LRes)^ := Ord(#0);
+    {$ENDIF}
+    P := Pointer(Result);
+    Inc(P, LRes-Buf.Pos-L);
+    if Buf.Pos > 0 then begin
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos);
+      Inc(P, Buf.Pos);
+      Buf.Pos := 0;
+    end;
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, P^, L);
+  end;
+end;
+
+procedure ToBuff(Value: AnsiChar; var Buf: TRawBuff; var Result: RawByteString); overload;
+var
+  P: PAnsiChar;
+  L: LengthInt;
+begin
+  if Buf.Pos <= (SizeOf(Buf.Buf)) then begin
+    Buf.Buf[Buf.Pos] := Value;
+    Inc(Buf.Pos);
+  end else begin
+    L := Length(Result)+Buf.Pos+1;
+    SetLength(Result, L{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}+1{$ENDIF});
+    P := Pointer(Result);
+    {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
+    PByte(P+L)^ := Ord(#0);
+    {$ENDIF}
+    Inc(P, Length(Result)-Buf.Pos-1);
+    if Buf.Pos > 0 then begin
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos);
+      Inc(P, Buf.Pos);
+      Buf.Pos := 0;
+    end;
+    AnsiChar(P^) := Value;
+  end;
+end;
+
+procedure ToBuff(const Value: ZWideString; var Buf: TUCS2Buff; var Result: ZWideString); overload;
+var
+  P: PWideChar;
+  L: LengthInt;
+begin
+  L := Length(Value);
+  if L <= 0 then Exit;
+  if L <= ((SizeOf(Buf.Buf) shr 1)-Buf.Pos) then begin
+    P := Pointer(Value);
+    if L = 1 //happens very often (comma,space etc) -> worth it the check
+    then Buf.Buf[Buf.Pos] := P^
+    else {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, Buf.Buf[Buf.Pos], L shl 1);
+    Inc(Buf.Pos, L);
+  end else begin
+    SetLength(Result, Length(Result)+Buf.Pos+L);
+    P := Pointer(Result);
+    Inc(P, Length(Result)-Buf.Pos-L);
+    if Buf.Pos > 0 then begin
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos shl 1);
+      Inc(P, Buf.Pos);
+      Buf.Pos := 0;
+    end;
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(Value)^, P^, L shl 1);
+  end;
+end;
+
+procedure ToBuff(Value: WideChar; var Buf: TUCS2Buff; var Result: ZWideString); overload;
+var
+  P: PWideChar;
+  L: LengthInt;
+begin
+  if (Buf.Pos <= (SizeOf(Buf.Buf) shr 1)) then begin
+    Buf.Buf[Buf.Pos] := Value;
+    Inc(Buf.Pos);
+  end else begin
+    L := Length(Result)+Buf.Pos+1;
+    SetLength(Result, L);
+    P := Pointer(Result);
+    Inc(P, L-Buf.Pos-1);
+    if Buf.Pos > 0 then begin
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos shl 1);
+      Inc(P, Buf.Pos);
+      Buf.Pos := 0;
+    end;
+    P^ := Value;
+  end;
+end;
+
+procedure FlushBuff(var Buf: TRawBuff; var Result: RawByteString); overload;
+var P: PAnsiChar;
+  L: LengthInt;
+begin
+  if Buf.Pos > 0 then begin
+    L := Length(Result)+Buf.Pos;
+    SetLength(Result, L{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}+1{$ENDIF});
+    P := Pointer(Result);
+    {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
+    PByte(P+L)^ := Ord(#0);
+    {$ENDIF}
+    Inc(P, L-Buf.Pos);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos);
+    Buf.Pos := 0;
+  end;
+end;
+
+procedure FlushBuff(var Buf: TUCS2Buff; var Result: ZWideString); overload;
+var P: PWideChar;
+  L: LengthInt;
+begin
+  if Buf.Pos > 0 then begin
+    L := Length(Result)+Buf.Pos;
+    SetLength(Result, L);
+    P := Pointer(Result);
+    Inc(P, L-Buf.Pos);
+    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Buf.Buf[0], P^, Buf.Pos shl 1);
+    Buf.Pos := 0;
+  end;
+end;
+
 end.
+
 

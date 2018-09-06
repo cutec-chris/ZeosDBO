@@ -68,8 +68,11 @@ const
   { Parameters common for all DBC's }
 
   { Following parameters are for datasets and statements but could be set for
-    connections to influence all linked objects. 
-    Values of all these parameters are being determined via DefineStatementParameter }
+    connections to influence all linked objects.
+    Values of all these parameters are being determined via DefineStatementParameter
+    (value from DS/Stmt properties retrieved first; if it is empty, then value
+    from Connection properties retrieved. If it is empty too, the default value
+    is returned (usually empty string for options of type STR) }
 
   // Type: all | changed
   // Same as Dataset.UpdateMode property
@@ -87,12 +90,19 @@ const
   // Same as TZDatasetOptions.doCachedLobs in Dataset.Options property
   DSProps_CachedLobs = 'CachedLob';
   // Type: INT
-  // Same as Statement.ChunkSize, size of internal buffer
-  DSProps_ChunkSize = 'chunk_size';
+  // Same as Statement.ChunkSize, size of chunks for retrieving/sending long data
+  // depends to your network speed
+  DSProps_ChunkSize = 'chunk_size'; //default is a very low value of 4KB
+  // Type: INT
+  // how many executions must be done to realy prepare the statement?
+  // JDBC does prepare on after 4 executions.
+  // A negative value means never prepare.
+  // actually used on MySQL and PostresSQL only
+  DSProps_MinExecCntBeforePrepare = 'MinExecCountBeforePrepare';
 
   { Parameters for datasets }
 
-  // Type: STR, like Field1[,Field2,...]
+  // Type: STR, like Field1[, Field2, ...] (separators: "," or ";")
   // List of fields; if defined, they are used for locating and, if WhereMode = KeyOnly,
   // for constructing a WHERE clause
   DSProps_KeyFields = 'KeyFields';
@@ -131,17 +141,22 @@ const
 {$IFEND}
 
 {$IF DEFINED(ENABLE_ORACLE) OR DEFINED(ENABLE_POSTGRESQL) OR DEFINED(ENABLE_INTERBASE)}
-  // Type: STRING
-  // ','- or ';'-separated list of fields which will get their values on INSERT
+  // Type: STR, like Field1[, Field2, ...] (separators: "," or ";")
+  // List of fields which will get their values on INSERT
   // (by INSERT...RETURNING) construction.
   DSProps_InsertReturningFields = 'InsertReturningFields';
 {$IFEND}
 
 {$IF DEFINED(ENABLE_ADO) OR DEFINED(ENABLE_OLEDB)}
-  // Type: STRING
+  // Type: STR
   // ?
   ConnProps_Provider = 'Provider';
-  ConnProps_Initial_Catalog = 'Initial Catalog';
+{$IFEND}
+
+{$IF DEFINED(ENABLE_ODBC) OR DEFINED(ENABLE_OLEDB)}
+  // Type: BOOLEAN
+  // Use trusted connection
+  ConnProps_TrustedConnection = 'Trusted_Connection';
 {$IFEND}
 
   { Parameters specific to a single DBC }
@@ -189,6 +204,9 @@ const
   // Type: INT
   // Value used in 'SET GLOBAL max_allowed_packet' statement, refer to MySql manual for details
   ConnProps_MaxLobSize = 'MaxLobSize';
+  // Type: BOOLEAN
+  // Value used to identify BIT(1) as Boolean instead of ENUM('Y','N')
+  ConnProps_MySQL_FieldType_Bit_1_IsBoolean = 'MySQL_FieldType_Bit_1_IsBoolean';
 
   { In addition, any server parameter prefixed by value of
     ZPlainMySqlConstants.SERVER_ARGUMENTS_KEY_PREFIX constant and all members from
@@ -199,7 +217,11 @@ const
     (see comment above) }
 
   // Type: BOOLEAN
-  // Fetching rows using UseResult instead of StoreResult
+  // Fetching rows one by one using UseResult instead of StoreResult
+  // this reduces the memory-consumtion of libmysql.
+  // Note mysql is tabular streamed! ->
+  // So you can't use it within using metainformations or multiple active
+  // resultsets!
   DSProps_UseResult = 'UseResult';
   // Type: INT
   // Sets STMT_ATTR_PREFETCH_ROWS option, refer to MySql manual for details
@@ -219,7 +241,7 @@ const
   // Value used in 'SET standard_conforming_strings = <Value>' query on connect,
   // refer to Postgre manual for details
   ConnProps_StdConformingStrings = 'standard_conforming_strings';
-
+  ConnProps_integer_datetimes = 'integer_datetimes';
   { Parameters used for constructing ConnectStr.
     Refer to Postgre manual for types and acceptable values of these parameters }
   ConnProps_ApplicationName = 'application_name';
@@ -240,6 +262,11 @@ const
   // Type: BOOLEAN
   // Is Oid type treated as Large Object handle (blob) or as a regular integer
   DSProps_OidAsBlob = 'OidAsBlob';
+  // Type: BOOLEAN
+  DSProps_ExexAsync = 'execute_async';
+  // Type: BOOLEAN
+  // fetch row by row from Server -> do not cache the results in libpq
+  DSProps_SingleRowMode = 'SingleRowMode';
 {$ENDIF}
 
 {$IFDEF ENABLE_INTERBASE}
@@ -259,6 +286,35 @@ const
   // Type: STR
   // Create new DB on the given path on connect
   ConnProps_CreateNewDatabase = 'CreateNewDatabase';
+  // Type: BOOLEAN
+  // Set a type of **all** CHAR(16) CHAR SET OCTETS fields to GUID.
+  ConnProps_SetGUIDByType = 'SetGUIDByType';
+  // Type: STR, like Domain1[, Domain2, ...] (separators: "," or ";")
+  // List of domains; if defined, fields of that domains will get GUID type
+  ConnProps_GUIDDomains = 'GUIDDomains';
+  // Type: enum, <INET | WNET | XNET | LOCAL>
+  // can be used to define the firebird protocol to be used
+  // for FB 3.0 this will enable the construction of url style connection strings
+  // see firebird 3.0 release notes
+  ConnProps_FBProtocol = 'fb_protocol';
+
+  { Parameters that are for datasets and statements but could be set for connections
+    (see comment above) }
+
+  // Type: STR, like Field1[, Field2, ...] (separators: "," or ";")
+  // List of fields; if defined, fields with these names will get GUID type
+  // Be careful using this option on connection level.
+  DSProps_GUIDFields = 'GUIDFields';
+
+  { Parameters for datasets }
+
+  // Type: BOOLEAN
+  // Set a type of **all** CHAR(16) CHAR SET OCTETS fields to GUID.
+  // The effective value of this parameter is also determined via
+  // DefineStatementParameter but declared as separate constant to logically
+  // distinguish DS-level and DB-level options.
+  // In addition, DB-level option affects things besides datasets.
+  DSProps_SetGUIDByType = ConnProps_SetGUIDByType;
 
   { In addition, all isc_dpb_* (connection level) and isc_tpb_* (transaction level)
     parameters could be used as well, refer to Firebird manual for details.
@@ -292,6 +348,7 @@ const
   ConnProps_Synchronous = 'synchronous';
   ConnProps_LockingMode = 'locking_mode';
   ConnProps_ForeignKeys = 'foreign_keys';
+  ConnProps_journal_mode = 'journal_mode';
 
   { Parameters that are for datasets and statements but could be set for connections
     (see comment above) }
@@ -335,18 +392,6 @@ const
 {$ENDIF}
 
 {$IFDEF ENABLE_OLEDB}
-{$ENDIF}
-
-{$IFDEF ENABLE_ODBC}
-  // Type: STR, like CP_UTF8
-  // Codepage to use (same as ConnProps_CodePage)
-  ConnProps_Charset = 'characterset';
-  // Type: BOOLEAN
-  // Use trusted connection
-  ConnProps_TrustedConnection = 'Trusted_Connection';
-  // Type: SQL_DRIVER_COMPLETE | SQL_DRIVER_PROMPT | SQL_DRIVER_COMPLETE_REQUIRED
-  // Refer to ODBC manual for details
-  ConnProps_DriverCompletion = 'DriverCompletion';
   // Type: INT
   // ?
   ConnProps_TDSPacketSize = 'tds_packed_size';
@@ -356,6 +401,18 @@ const
   // Type: STR
   // User name
   ConnProps_UserId = 'User Id';
+  // Type: STR
+  // ?
+  ConnProps_Initial_Catalog = 'Initial Catalog';
+{$ENDIF}
+
+{$IFDEF ENABLE_ODBC}
+  // Type: STR, like CP_UTF8
+  // Codepage to use (same as ConnProps_CodePage)
+  ConnProps_Charset = 'characterset';
+  // Type: SQL_DRIVER_COMPLETE | SQL_DRIVER_PROMPT | SQL_DRIVER_COMPLETE_REQUIRED
+  // Refer to ODBC manual for details
+  ConnProps_DriverCompletion = 'DriverCompletion';
 {$ENDIF}
 
 {$IFDEF ENABLE_POOLED}

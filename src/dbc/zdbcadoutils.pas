@@ -54,7 +54,6 @@ unit ZDbcAdoUtils;
 interface
 
 {$I ZDbc.inc}
-{$IFDEF ENABLE_ADO}
 
 uses Windows, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, ActiveX,
   Types,
@@ -150,9 +149,9 @@ var
 implementation
 
 uses
-  ComObj, Variants, Math,
+  {$IFDEF WITH_UNIT_NAMESPACES}System.Win.ComObj{$ELSE}ComObj{$ENDIF}, Variants, Math,
   ZSysUtils, ZDbcAdoResultSet, ZDbcCachedResultSet, ZDbcResultSet, ZDbcUtils,
-  ZMessages, ZEncoding, ZFastCode;
+  ZMessages, ZEncoding, ZFastCode, ZClasses;
 
 {**
   Converts an ADO native types into string related.
@@ -706,7 +705,7 @@ begin
             begin
               P.Type_ := adGUID;
               P.Size := 38;
-              P.Value := {$IFNDEF UNICODE}ASCII7ToUnicodeString{$ENDIF}(GUIDToString(ZGUIDArray[j]));
+              P.Value := GUIDToUnicode(ZGUIDArray[j]);
             end;
           stString, stUnicodeString:
             begin
@@ -856,7 +855,7 @@ procedure RefreshParameters(const AdoCommand: ZPlainAdo.Command;
         { We can't use the instance of the parameter in the ADO collection because
           it will be freed when the connection is closed even though we have a
           reference to it.  So instead we create our own and copy the settings }
-          if Assigned(DirectionTypes) then
+          if Assigned(DirectionTypes) and (Length(DirectionTypes^) > I) then
             Parameter := CreateParameter(Name, Type_, DirectionTypes^[i], Size, EmptyParam)
           else
             Parameter := CreateParameter(Name, Type_, Direction, Size, EmptyParam);
@@ -878,11 +877,4 @@ initialization
   OleCheck(CoGetMalloc(1, ZAdoMalloc));
 finalization
   ZAdoMalloc := nil;
-
-{$ELSE}
-implementation
-{$ENDIF ENABLE_ADO}
 end.
-
-
-

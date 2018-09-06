@@ -57,7 +57,7 @@ interface
 
 uses
   Classes, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, ZDbcIntfs,
-  ZSqlTestCase, ZCompatibility, ZDbcPostgreSql, ZTestConsts;
+  ZSqlTestCase, ZCompatibility, ZDbcPostgreSql, ZTestConsts, ZURL;
 
 type
 
@@ -118,10 +118,13 @@ var
   Connection: IZConnection;
   ResultSet: IZResultSet;
   Statement: IZStatement;
+  Url: TZURL;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Connection := DriverManager.GetConnection(GetConnectionUrl('oidasblob=true'));
+  Url := GetConnectionUrl('oidasblob=true');
+  Connection := DriverManager.GetConnection(Url.URL);
+  Url.Free;
   //Connection := DriverManager.GetConnectionWithLogin(
     //GetConnectionUrl + '?oidasblob=true', UserName, Password);
   Statement := Connection.CreateStatement;
@@ -130,7 +133,9 @@ begin
   ResultSet.Close;
   Statement.Close;
 
-  Connection := DriverManager.GetConnection(GetConnectionUrl('oidasblob=false'));
+  Url := GetConnectionUrl('oidasblob=false');
+  Connection := DriverManager.GetConnection(Url.URL);
+  Url.Free;
 //  Connection := DriverManager.GetConnectionWithLogin(
   //  GetConnectionUrl + '?oidasblob=false', UserName, Password);
   Statement := Connection.CreateStatement;
@@ -232,10 +237,10 @@ begin
   Statement.ExecuteUpdate(Sql);
 
   StrStream := TMemoryStream.Create;
-  StrStream.LoadFromFile('../../../database/text/lgpl.txt');
+  StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
   StrStream.Size := 1024;
   BinStream := TMemoryStream.Create;
-  BinStream.LoadFromFile('../../../database/images/dogs.jpg');
+  BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
   BinStream.Size := 1024;
 
   StrStream1 := nil;
@@ -361,11 +366,15 @@ var
   TextStream: TStream;
   ImageStream: TMemoryStream;
   TempStream: TStream;
+  Url: TZURL;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Connection := DriverManager.GetConnection(GetConnectionUrl('oidasblob=true'));
+  Url := GetConnectionUrl('oidasblob=true');
+  Connection := DriverManager.GetConnection(Url.URL);
+  Url.Free;
   Connection.SetTransactionIsolation(tiReadCommitted);
+  Connection.SetAutoCommit(False);
   Statement := Connection.CreateStatement;
   CheckNotNull(Statement);
   Statement.SetResultSetType(rtScrollInsensitive);
@@ -376,7 +385,7 @@ begin
 
   TextStream := TStringStream.Create('ABCDEFG');
   ImageStream := TMemoryStream.Create;
-  ImageStream.LoadFromFile('../../../database/images/horse.jpg');
+  ImageStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/horse.jpg');
 
   try
     PreparedStatement := Connection.PrepareStatement(
@@ -586,8 +595,8 @@ begin
   try
     Statement.ExecuteQuery('select * from people where xp_id=1');
     Fail('Incorrect syntax error processing');
-  except
-    // Ignore.
+  except on E: Exception do
+    CheckNotTestFailure(E);
   end;
 
   Statement.ExecuteQuery('select * from people where p_id=1');
@@ -660,6 +669,7 @@ begin
   Statement := Connection.CreateStatement;
   ResultSet := Statement.ExecuteQuery('select relacl from pg_class;');
   ///
+  ResultSet.Next;
   ResultSet.GetBlob(relacl_index);
   Statement.Close;
 end;
@@ -717,8 +727,8 @@ procedure TZTestDbcPostgreSQLBugReportMBCs.Test739514;
 const
   id_index = {$IFDEF GENERIC_INDEX}0{$ELSE}1{$ENDIF};
   fld_index = {$IFDEF GENERIC_INDEX}1{$ELSE}2{$ENDIF};
-  Str1: ZWideString = 'Абракадабра';
-  Str2: ZWideString = '\Победа\';
+  Str1: ZWideString = #$0410#$0431#$0440#$0430#$043a#$0430#$0434#$0430#$0431#$0440#$0430 {'Абракадабра'}; // Abrakadabra in kyryllic letters
+  Str2: ZWideString = '\'#$041f#$043e#$0431#$0435#$0434#$0430'\' {'\Победа\'}; // victory / success in russian (according to leo.org)
 var
   ResultSet: IZResultSet;
   Statement: IZStatement;

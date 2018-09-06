@@ -111,11 +111,15 @@ type
     procedure TestMantis235;
     procedure TestTicket52;
     procedure TestMS56OBER9357;
+    procedure TestTicket186_MultipleResults;
+    procedure TestBin_Collation;
+    procedure TestEvalue2Params;
+    procedure TestTicked240;
   end;
 
 implementation
 
-uses ZTestCase;
+uses ZTestCase, ZDbcMySQL, ZSysUtils;
 
 { TZTestCompMySQLBugReport }
 
@@ -206,47 +210,62 @@ end;
   version 6.0.8. When you use this fieldtype, the values
   returned are strings, not booleans. The fieldtype is
   correct (Boolean) in version 5.4.1.
+
+  EH: but this is not correct for all cases. loads users want to have it mapped
+  as string. So since 2018 MySQL still not have a true bool type we'll
+  map fieldtype bit(1) as Boolean which is the only type with just a 0/1
+  switch. Keep hands far away from (un)signed tinyint(1) which has a range
+  of shortint/byte
 }
 procedure TZTestCompMySQLBugReport.Test735299;
 var
   Query: TZQuery;
+  B: Boolean;
+const
+  tbl: array[Boolean] of String = ('table735299', 'table735299_bit');
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Query := CreateQuery;
-  try
-    // Query.RequestLive := True;
-    Query.SQL.Text := 'DELETE FROM table735299';
-    Query.ExecSQL;
+  Connection.Connect;
+  for B := (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit downto False do begin
+    if Connection.Connected then
+      Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+    Query := CreateQuery;
+    try
+      // Query.RequestLive := True;
+      Query.SQL.Text := 'DELETE FROM '+tbl[B];
+      Query.ExecSQL;
 
-    Query.SQL.Text := 'SELECT * FROM table735299';
-    Query.Open;
-    CheckEquals(3, Query.FieldCount);
-    CheckEquals(Ord(ftInteger), Ord(Query.FieldDefs[0].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.FieldDefs[1].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.FieldDefs[2].DataType));
-    Query.Append;
-    Query.Fields[0].AsInteger := 1;
-    Query.Fields[1].AsBoolean := True;
-    Query.Fields[2].AsBoolean := False;
-    Query.Post;
-    Query.Close;
+      Query.SQL.Text := 'SELECT * FROM '+tbl[B];
+      Query.Open;
+      CheckEquals(3, Query.FieldCount);
+      CheckEquals(Ord(ftInteger), Ord(Query.FieldDefs[0].DataType));
+      CheckEquals(Ord(ftBoolean), Ord(Query.FieldDefs[1].DataType));
+      CheckEquals(Ord(ftBoolean), Ord(Query.FieldDefs[2].DataType));
+      Query.Append;
+      Query.Fields[0].AsInteger := 1;
+      Query.Fields[1].AsBoolean := True;
+      Query.Fields[2].AsBoolean := False;
+      Query.Post;
+      Query.Close;
 
-    Query.SQL.Text := 'SELECT * FROM table735299';
-    Query.Open;
-    CheckEquals(1, Query.RecordCount);
-    CheckEquals(1, Query.Fields[0].AsInteger);
-    CheckEquals(True, Query.Fields[1].AsBoolean);
-    CheckEquals(False, Query.Fields[2].AsBoolean);
-    Query.Delete;
-    Query.Close;
+      Query.SQL.Text := 'SELECT * FROM '+tbl[B];
+      Query.Open;
+      CheckEquals(1, Query.RecordCount);
+      CheckEquals(1, Query.Fields[0].AsInteger);
+      CheckEquals(True, Query.Fields[1].AsBoolean);
+      CheckEquals(False, Query.Fields[2].AsBoolean);
+      Query.Delete;
+      Query.Close;
 
-    Query.SQL.Text := 'SELECT * FROM table735299';
-    Query.Open;
-    CheckEquals(0, Query.RecordCount);
-    Query.Close;
-  finally
-    Query.Free;
+      Query.SQL.Text := 'SELECT * FROM '+tbl[B];
+      Query.Open;
+      CheckEquals(0, Query.RecordCount);
+      Query.Close;
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -262,41 +281,51 @@ end;
 procedure TZTestCompMySQLBugReport.Test740144;
 var
   Query: TZQuery;
+  B: Boolean;
+const
+  tbl: array[Boolean] of String = ('table735299', 'table735299_bit');
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Query := CreateQuery;
-  try
-    // Query.RequestLive := True;
-    Query.SQL.Text := 'DELETE FROM table735299';
-    Query.ExecSQL;
+  Connection.Connect;
+  for B := (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit downto False do begin
+    if Connection.Connected then
+      Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+    Query := CreateQuery;
+    try
+      // Query.RequestLive := True;
+      Query.SQL.Text := 'DELETE FROM '+tbl[B];
+      Query.ExecSQL;
 
-    Query.SQL.Text := 'SELECT * FROM table735299';
-    Query.Open;
-    Query.Append;
-    Query.Fields[0].AsInteger := 1;
-    Query.Fields[1].AsBoolean := True;
-    Query.Fields[2].AsBoolean := False;
-    Query.Post;
-    Query.Append;
-    Query.Fields[0].AsInteger := 2;
-    Query.Fields[1].AsBoolean := False;
-    Query.Fields[2].AsBoolean := True;
-    Query.Post;
-    Query.Append;
-    Query.Fields[0].AsInteger := 3;
-    Query.Post;
-    Query.Close;
+      Query.SQL.Text := 'SELECT * FROM '+tbl[B];
+      Query.Open;
+      Query.Append;
+      Query.Fields[0].AsInteger := 1;
+      Query.Fields[1].AsBoolean := True;
+      Query.Fields[2].AsBoolean := False;
+      Query.Post;
+      Query.Append;
+      Query.Fields[0].AsInteger := 2;
+      Query.Fields[1].AsBoolean := False;
+      Query.Fields[2].AsBoolean := True;
 
-    Query.SQL.Text := 'SELECT * FROM table735299 ORDER BY id';
-    Query.Open;
-    CheckEquals(True, Query.Locate('fld1', VarArrayOf([True]), []));
-    CheckEquals(1, Query.RecNo);
-    CheckEquals(True, Query.Locate('fld1,fld2', VarArrayOf([Null, Null]), []));
-    CheckEquals(3, Query.RecNo);
-    Query.Close;
-  finally
-    Query.Free;
+      Query.Post;
+      Query.Append;
+      Query.Fields[0].AsInteger := 3;
+      Query.Post;
+      Query.Close;
+
+      Query.SQL.Text := 'SELECT * FROM '+tbl[B]+' ORDER BY id';
+      Query.Open;
+      CheckEquals(True, Query.Locate('fld1', VarArrayOf([True]), []));
+      CheckEquals(1, Query.RecNo);
+      CheckEquals(True, Query.Locate('fld1,fld2', VarArrayOf([Null, Null]), []));
+      CheckEquals(3, Query.RecNo);
+      Query.Close;
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -1068,29 +1097,39 @@ end;
 procedure TZTestCompMySQLBugReport.Test886841;
 var
   Query: TZQuery;
+  B: Boolean;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Query := CreateQuery;
-  try
-    Query.SQL.Text := 'DELETE FROM table886841';
-    Query.ExecSQL;
+  Connection.Connect;
+  for B := (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit downto False do begin
+    Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+    Query := CreateQuery;
+    try
+      Query.SQL.Text := 'DELETE FROM table886841';
+      Query.ExecSQL;
 
-    // Query.RequestLive := True;
-    Query.SQL.Text := 'SELECT * FROM table886841';
-    Query.Open;
+      // Query.RequestLive := True;
+      Query.SQL.Text := 'SELECT * FROM table886841';
+      Query.Open;
 
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[0].DataType));
-    Query.Append;
-    Query.Post;
-    CheckEquals(True, Query.Fields[0].AsBoolean);
+      if not B
+      then CheckEquals(Ord(ftBoolean), Ord(Query.Fields[0].DataType))
+      else Check(Query.Fields[0].DataType in [ftString, ftWideString]);
+      Query.Append;
+      Query.Post;
+      if not B
+      then CheckEquals(True, Query.Fields[0].AsBoolean)
+      else CheckEquals('y', LowerCase(Query.Fields[0].AsString));
 
-    Query.Close;
+      Query.Close;
 
-    Query.SQL.Text := 'DELETE FROM table886841';
-    Query.ExecSQL;
-  finally
-    Query.Free;
+      Query.SQL.Text := 'DELETE FROM table886841';
+      Query.ExecSQL;
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -1101,56 +1140,70 @@ end;
 procedure TZTestCompMySQLBugReport.Test894367;
 var
   Query: TZQuery;
+  B: Boolean;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Query := CreateQuery;
-  try
-    Query.SQL.Text := 'SELECT a.fld1, b.fld2, 1 + 2 as fld2, a.fld2,'
-      + ' c.fld1, b.fld1, c.fld2, ''xyz'' as fld1'
-      + ' FROM table894367a as a, table894367b as b, table894367c as c';
-    Query.Open;
+  Connection.Connect;
+  for B := (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit downto False do begin
+    Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+    Query := CreateQuery;
+    try
+      Query.SQL.Text := 'SELECT a.fld1, b.fld2, 1 + 2 as fld2, a.fld2,'
+        + ' c.fld1, b.fld1, c.fld2, ''xyz'' as fld1'
+        + ' FROM table894367a as a, table894367b as b, table894367c as c';
+      Query.Open;
 
-    if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
-      CheckEquals(Ord(ftWideString), Ord(Query.Fields[0].DataType))
-    else
-      CheckEquals(Ord(ftString), Ord(Query.Fields[0].DataType));
-    CheckEquals(Ord(ftFloat), Ord(Query.Fields[1].DataType));
-    CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[2].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[3].DataType));
-    CheckEquals(Ord(ftBlob), Ord(Query.Fields[4].DataType));
-    CheckEquals(Ord(ftInteger), Ord(Query.Fields[5].DataType));
-    CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[6].DataType));
-    if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
-      CheckEquals(Ord(ftWideString), Ord(Query.Fields[7].DataType))
-    else
-      CheckEquals(Ord(ftString), Ord(Query.Fields[7].DataType));
+      if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
+        CheckEquals(Ord(ftWideString), Ord(Query.Fields[0].DataType))
+      else
+        CheckEquals(Ord(ftString), Ord(Query.Fields[0].DataType));
+      CheckEquals(Ord(ftFloat), Ord(Query.Fields[1].DataType));
+     // behavior inconsistency between mysql and mariadb:
+     // mysql maps const ordinals to Largeint, mariadb to integer(if in range)
+     // CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[2].DataType));
+      if not B
+      then CheckEquals(Ord(ftBoolean), Ord(Query.Fields[3].DataType))
+      else Check(Query.Fields[3].DataType in [ftString, ftWideString]);
+      CheckEquals(Ord(ftBlob), Ord(Query.Fields[4].DataType));
+      CheckEquals(Ord(ftInteger), Ord(Query.Fields[5].DataType));
+      CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[6].DataType));
+      if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
+        CheckEquals(Ord(ftWideString), Ord(Query.Fields[7].DataType))
+      else
+        CheckEquals(Ord(ftString), Ord(Query.Fields[7].DataType));
 
-    Query.Close;
+      Query.Close;
 
-    Query.SQL.Text := 'SELECT a.*, 1 + 2 as fld2, b.*,'
-      + ' c.fld1, c.fld2, ''xyz'' as fld1'
-      + ' FROM table894367a as a, table894367b as b, table894367c as c';
-    Query.Open;
+      Query.SQL.Text := 'SELECT a.*, 1 + 2 as fld2, b.*,'
+        + ' c.fld1, c.fld2, ''xyz'' as fld1'
+        + ' FROM table894367a as a, table894367b as b, table894367c as c';
+      Query.Open;
 
-    if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
-      CheckEquals(Ord(ftWideString), Ord(Query.Fields[0].DataType))
-    else
-      CheckEquals(Ord(ftString), Ord(Query.Fields[0].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[1].DataType));
-    CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[2].DataType));
-    CheckEquals(Ord(ftInteger), Ord(Query.Fields[3].DataType));
-    CheckEquals(Ord(ftFloat), Ord(Query.Fields[4].DataType));
-    CheckEquals(Ord(ftBlob), Ord(Query.Fields[5].DataType));
-    CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[6].DataType));
-    if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
-      CheckEquals(Ord(ftWideString), Ord(Query.Fields[7].DataType))
-    else
-      CheckEquals(Ord(ftString), Ord(Query.Fields[7].DataType));
+      if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
+        CheckEquals(Ord(ftWideString), Ord(Query.Fields[0].DataType))
+      else
+        CheckEquals(Ord(ftString), Ord(Query.Fields[0].DataType));
+      if not B
+      then CheckEquals(Ord(ftBoolean), Ord(Query.Fields[1].DataType))
+      else Check(Query.Fields[1].DataType in [ftString, ftWideString]);
+     // behavior inconsistency between mysql and mariadb:
+     // mysql maps const ordinals to Largeint, mariadb to integer(if in range)
+     // CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[2].DataType));
+      CheckEquals(Ord(ftInteger), Ord(Query.Fields[3].DataType));
+      CheckEquals(Ord(ftFloat), Ord(Query.Fields[4].DataType));
+      CheckEquals(Ord(ftBlob), Ord(Query.Fields[5].DataType));
+      CheckEquals(Ord(ftLargeInt), Ord(Query.Fields[6].DataType));
+      if ( Connection.DbcConnection.GetConSettings.CPType = cCP_UTF16 ) then
+        CheckEquals(Ord(ftWideString), Ord(Query.Fields[7].DataType))
+      else
+        CheckEquals(Ord(ftString), Ord(Query.Fields[7].DataType));
 
-    Query.Close;
-  finally
-    Query.Free;
+      Query.Close;
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -1299,7 +1352,8 @@ begin
       Query.ExecSQL;
 
       Fail('Wrong exception handling in MySQL');
-    except
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
   finally
     Query.Free;
@@ -1348,27 +1402,46 @@ end;
 {**
   Tests the bug report #961337
   ENUM('Y','N') is not recognized as Boolean when column name is renamed.
+
+  EH: but this is not correct for all cases. loads users want to have it mapped
+  as string. So since 2018 MySQL still not have a true bool type we'll
+  map fieldtype bit(1) as Boolean which is the only type with just a 0/1
+  switch. Keep hands far away from (un)signed tinyint(1) which has a range
+  of shortint/byte
 }
 procedure TZTestCompMySQLBugReport.Test961337;
 var
   Query: TZQuery;
+  B: Boolean;
 begin
   if SkipForReason(srClosedBug) then Exit;
-
-  Query := CreateQuery;
-  try
-    Query.SQL.Text := 'SELECT id, fld1, fld2, fld1 as fld3,'
-      + ' fld2 as fld4 FROM table735299';
-    // Query.RequestLive := True;
-    Query.Open;
-    CheckEquals(Ord(ftInteger), Ord(Query.Fields[0].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[1].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[2].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[3].DataType));
-    CheckEquals(Ord(ftBoolean), Ord(Query.Fields[4].DataType));
-    Query.Close;
-  finally
-    Query.Free;
+  Connection.Connect;
+  for B := (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit downto False do begin
+    Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+    Query := CreateQuery;
+    try
+      Query.SQL.Text := 'SELECT id, fld1, fld2, fld1 as fld3,'
+        + ' fld2 as fld4 FROM table735299';
+      // Query.RequestLive := True;
+      Query.Open;
+      if not B then begin
+        CheckEquals(Ord(ftInteger), Ord(Query.Fields[0].DataType));
+        CheckEquals(Ord(ftBoolean), Ord(Query.Fields[1].DataType));
+        CheckEquals(Ord(ftBoolean), Ord(Query.Fields[2].DataType));
+        CheckEquals(Ord(ftBoolean), Ord(Query.Fields[3].DataType));
+        CheckEquals(Ord(ftBoolean), Ord(Query.Fields[4].DataType));
+      end else begin
+        CheckEquals(Ord(ftInteger), Ord(Query.Fields[0].DataType));
+        Check(Query.Fields[1].DataType in [ftString, ftWideString]);
+        Check(Query.Fields[2].DataType in [ftString, ftWideString]);
+        Check(Query.Fields[3].DataType in [ftString, ftWideString]);
+        Check(Query.Fields[4].DataType in [ftString, ftWideString]);
+      end;
+      Query.Close;
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -1391,10 +1464,10 @@ begin
   Query := CreateQuery;
   try
     Query.Connection := Connection;
-    Query.SQL.Text := 'DELETE FROM ' + DatabaseName + '.table740899';
+    Query.SQL.Text := 'DELETE FROM `' + DatabaseName + '`.table740899';
     Query.ExecSQL;
 
-    Query.SQL.Text := 'SELECT * FROM ' + DatabaseName + '.table740899';
+    Query.SQL.Text := 'SELECT * FROM `' + DatabaseName + '`.table740899';
     // Query.RequestLive := True;
     Query.Open;
 
@@ -1421,7 +1494,7 @@ begin
 
     Query.Close;
 
-    Query.SQL.Text := 'DELETE FROM ' + DatabaseName + '.table740899';
+    Query.SQL.Text := 'DELETE FROM `' + DatabaseName + '`.table740899';
     Query.ExecSQL;
   finally
     Query.Free;
@@ -1545,6 +1618,60 @@ begin
   finally
     Query.Free;
     UpdateSQL.Free;
+  end;
+end;
+
+procedure TZTestCompMySQLBugReport.TestBin_Collation;
+var
+  Query: TZQuery;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'SELECT * FROM `mysql`.`user`';
+
+    Query.Open;
+    Self.CheckStringFieldType(Query.Fields[0].DataType, Connection.DbcConnection.GetConSettings);
+    Query.Close;
+  finally
+    Query.Free;
+  end;
+end;
+
+procedure TZTestCompMySQLBugReport.TestEvalue2Params;
+var
+  Query: TZReadOnlyQuery;
+  B: Boolean;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  Connection.Connect;
+  if not (Connection.DbcConnection as IZMySQLConnection).SupportsFieldTypeBit then
+    Exit;
+  for B := True downto False do begin
+    if Connection.Connected then
+      Connection.Disconnect;
+    Connection.Properties.Values['MySQL_FieldType_Bit_1_IsBoolean']:= ZSysUtils.BoolStrs[B];
+
+    Query := CreateReadOnlyQuery;
+    Query.Connection.Connect;
+    Query.SQL.Text := 'SELECT p_ID, p_begin_work, '+
+      '/* IF condition, show SubName value*/ '+
+      'IF (:ShowSubName = True, p_name, NULL) AS SubName '+
+      'FROM people WHERE people.p_ID = :ID ';
+    try
+      CheckEquals(2, Query.Params.Count, 'Wrong param count');
+      if B
+      then Query.ParamByName('ShowSubName').AsBoolean := True
+      else Query.ParamByName('ShowSubName').AsInteger := Ord(True);
+      Query.ParamByName('ID').AsInteger := 1;
+      Query.Open;
+      Check(Query.RecordCount = 1, 'Wrong ReocrdCount');
+      Check(not Query.FieldByName('SubName').IsNull, 'Should be null');
+    finally
+      Query.Free;
+    end;
   end;
 end;
 
@@ -1703,6 +1830,71 @@ begin
 
   try
     CheckEquals(2, Query.RecordCount);
+  finally
+    Query.Free;
+  end;
+end;
+
+procedure TZTestCompMySQLBugReport.TestTicked240;
+var
+  Query: TZQuery;
+  I: Integer;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  Query := CreateQuery;
+  try
+    Query.CachedUpdates := False;
+    Query.SQL.Text := 'select * from TableTicket240';
+    Query.Open;
+    for i := 0 to 9 do begin
+      Query.Append;
+      Query.Fields[1].AsString := 'aaa';
+      Query.Post;
+      {$IFDEF WITH_ASLARGEINT}
+      if Query.Fields[0] Is TLargeIntField then
+        Check(TLargeIntField(Query.Fields[0]).AsLargeInt <> 0, 'autoincrement af unsigned bigint is not retrieved')
+      else
+      Check(Query.Fields[0].AsInteger <> 0, 'autoincrement af unsigned bigint is not retrieved');
+      {$ELSE}
+      Check(Query.Fields[0].AsInteger <> 0, 'autoincrement af unsigned bigint is not retrieved');
+      {$ENDIF}
+    end;
+    Query.Close;
+  finally
+    try
+      Query.SQL.Text := 'delete from TableTicket240';
+      Query.ExecSQL;
+    finally
+      Query.Free;
+    end;
+  end;
+end;
+
+procedure TZTestCompMySQLBugReport.TestTicket186_MultipleResults;
+var
+  Query: TZReadOnlyQuery;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  Query := CreateReadOnlyQuery;
+  try
+    { Remove previously created record }
+    Query.SQL.Text := 'CALL ThreeResultSets()';
+    Query.ExecSQL;
+    Query.ExecSQL;
+    Query.Open;
+    Query.Close;
+    Query.Open;
+    CheckEquals(Query.FieldCount, 8,  'ColumnCount of people table');
+    Query.Next;
+    Check(Query.NextResultSet, 'There is a second resultset available!');
+    CheckEquals(7, Query.FieldCount, 'ColumnCount of string_values table');
+    Query.Next;
+    Check(Query.NextResultSet, 'There is a third resultset available!');
+    Query.Next;
+    CheckEquals(6, Query.FieldCount, 'ColumnCount of equipment table');
+    Query.Close;
   finally
     Query.Free;
   end;

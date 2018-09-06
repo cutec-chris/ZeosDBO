@@ -359,16 +359,19 @@ begin
       MasterQuery.ApplyUpdates;
       Connection.Commit;
       Fail('Wrong ApplayUpdates behavior!');
-    except
-      DetailQuery.CancelUpdates;
-      MasterQuery.CancelUpdates;
-      SetTheData(1);
-      //DetailQuery.Options := DetailQuery.Options + [doUpdateMasterFirst];
-      MasterQuery.ApplyUpdates;
-      DetailQuery.ApplyUpdates;
-      Connection.Commit;
-      CheckEquals(True, (MasterQuery.State = dsBrowse), 'MasterQuery Browse-State');
-      CheckEquals(True, (DetailQuery.State = dsBrowse), 'DetailQuery Browse-State');
+    except on E: Exception do
+      begin
+        CheckNotTestFailure(E);
+        DetailQuery.CancelUpdates;
+        MasterQuery.CancelUpdates;
+        SetTheData(1);
+        //DetailQuery.Options := DetailQuery.Options + [doUpdateMasterFirst];
+        MasterQuery.ApplyUpdates;
+        DetailQuery.ApplyUpdates;
+        Connection.Commit;
+        CheckEquals(True, (MasterQuery.State = dsBrowse), 'MasterQuery Browse-State');
+        CheckEquals(True, (DetailQuery.State = dsBrowse), 'DetailQuery Browse-State');
+      end;
     end;
   finally
     MasterQuery.SQL.Text := 'delete from people where p_id = '+IntToStr(TestRowID);
@@ -400,7 +403,7 @@ begin
   CheckStringFieldType(MasterQuery.FieldByName('dep_name').DataType, Connection.DbcConnection.GetConSettings);
   CheckStringFieldType(MasterQuery.FieldByName('dep_shname').DataType, Connection.DbcConnection.GetConSettings);
     //ASA curiousity: if NCHAR and VARCHAR fields set to UTF8-CodePage we get the LONG_Char types as fieldTypes for !some! fields
-  if StartsWith(Protocol, 'ASA') and ( Connection.DbcConnection.GetConSettings.ClientCodePage^.CP = 65001 ) then
+  if (ProtocolType = protASA) and (Connection.DbcConnection.GetConSettings.ClientCodePage^.CP = 65001) then
     CheckMemoFieldType(MasterQuery.FieldByName('dep_address').DataType, Connection.DbcConnection.GetConSettings)
   else
     CheckStringFieldType(MasterQuery.FieldByName('dep_address').DataType, Connection.DbcConnection.GetConSettings);

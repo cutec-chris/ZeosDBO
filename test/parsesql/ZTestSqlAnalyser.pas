@@ -177,7 +177,7 @@ end;
 }
 procedure TZTestStatementAnalyser.TestSplitting;
 var
-  Tokens: TStrings;
+  Tokens: TZTokenList;
   Sections: TObjectList;
   Section: TZStatementSection;
 begin
@@ -229,7 +229,7 @@ end;
 }
 procedure TZTestStatementAnalyser.TestComposing;
 var
-  Tokens: TStrings;
+  Tokens: TZTokenList;
   Sections: TObjectList;
 begin
   Tokens := FAnalyser.TokenizeQuery(FTokenizer, 'select * from Table order by Id',
@@ -262,7 +262,7 @@ end;
 procedure TZTestStatementAnalyser.RunPerformanceTest(Query: string);
 var
   StartTicks: Cardinal;
-  Tokens: TStrings;
+  Tokens: TZTokenList;
   SelectSchema: IZSelectSchema;
 begin
   { Runs tokenizing test. }
@@ -516,6 +516,8 @@ var
   Query: string;
   StartTicks: Cardinal;
 begin
+  if SkipForReason(srNoPerformance) then Exit;
+
   StartTicks := GetTickCount;
   for I := 1 to 1000 do
   begin
@@ -531,6 +533,8 @@ begin
   end;
   PrintLn(Format('Subtest: "Overall Performance (3)", Time: %d',
     [GetTickCount - StartTicks]));
+
+  BlankCheck;
 end;
 
 {$IFDEF ENABLE_DBLIB}

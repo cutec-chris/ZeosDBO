@@ -89,6 +89,9 @@ type
     procedure Test_Ticket54;
     procedure Test_Ticket63;
     procedure Test_Ticket67;
+    procedure Test_Ticket228;
+    procedure Test_SF249;
+    procedure Test_SF287;
   end;
 
   ZTestCompInterbaseBugReportMBCs = class(TZAbstractCompSQLTestCaseMBCs)
@@ -128,8 +131,8 @@ begin
   try
     Connection.StartTransaction;
     Fail('StartTransaction should be allowed only in AutoCommit mode');
-  except
-    // Ignore.
+  except on E: Exception do
+    CheckNotTestFailure(E);
   end;
   Connection.Disconnect;
 end;
@@ -139,12 +142,10 @@ end;
 }
 procedure ZTestCompInterbaseBugReport.Test1021705;
 var
-  Error: Boolean;
   Query: TZQuery;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Error := True;
   Query := CreateQuery;
   try
     // Query.RequestLive := True;
@@ -171,12 +172,10 @@ begin
       Query.FieldByName('FLD1').AsFloat := 2.387;
       Query.FieldByName('FLD2').AsFloat := 34257.346;
       Query.Post;
-    except
-      Error := False
-    end;
-
-    if Error then
       Fail('Inserted wrong value 34257.346 into TABLE1021705.FLD2 ');
+    except on E: Exception do
+      CheckNotTestFailure(E);
+    end;
 
   finally
     Query.Free;
@@ -429,6 +428,7 @@ begin
   Connection.Disconnect;
   Connection.AutoCommit := False;
   Connection.Connect;
+  Check(True);
 end;
 
 {**
@@ -487,9 +487,9 @@ begin
 
   try
     { load data to the stream }
-    BinStream.LoadFromFile('../../../database/images/dogs.jpg');
+    BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
     BinStream.Size := 1024;
-    StrStream.LoadFromFile('../../../database/text/lgpl.txt');
+    StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
     StrStream.Size := 1024;
     { post empty row }
     Query.SQL.Text := 'SELECT * FROM BLOB_VALUES';
@@ -581,6 +581,8 @@ begin
   finally
     Query.Free;
   end;
+
+  Check(True);
 end;
 
 {**
@@ -664,13 +666,11 @@ end;
 
 procedure ZTestCompInterbaseBugReport.Test909181;
 var
-  Error: boolean;
   Query: TZQuery;
   UpdateSQL: TZUpdateSQL;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Error := True;
   Query := CreateQuery;
   // Query.RequestLive := True;
   UpdateSQL := TZUpdateSQL.Create(nil);
@@ -700,10 +700,10 @@ begin
       Post;
       Close;
     end;
-  except
-    Error := False;
+    Fail('Problems with set Null prametrs in SQLDA');
+  except on E: Exception do
+    CheckNotTestFailure(E);
   end;
-  CheckEquals(False, Error, 'Problems with set Null prametrs in SQLDA');
   UpdateSQL.Free;
   Query.Free;
 end;
@@ -713,12 +713,10 @@ end;
 }
 procedure ZTestCompInterbaseBugReport.Test984305;
 var
-  Error: boolean;
   Query: TZQuery;
 begin
   if SkipForReason(srClosedBug) then Exit;
 
-  Error := True;
   Query := CreateQuery;
   try
     Query.SQL.Text := 'SELECT * FROM PEOPLE';
@@ -730,15 +728,45 @@ begin
     try
       Connection.User := '';
       Connection.Connect;
-    except
-      Error := False;
+      Fail('Problems with change user name');
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
-    CheckEquals(False, Error, 'Problems with change user name');
 
   finally
     Query.Free;
   end;
 end;
+
+procedure ZTestCompInterbaseBugReport.Test_Ticket228;
+var
+  Query: TZQuery;
+  I, j: Integer;
+begin
+  if SkipForReason(srClosedBug) then Exit;
+
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'SELECT RDB$RELATION_NAME' +
+      ' FROM RDB$RELATIONS' +
+      ' WHERE RDB$SYSTEM_FLAG=0;';
+    Connection.StartTransaction;
+    Query.Open;
+    Connection.Commit;
+    I := Query.RecordCount; //<- did crash
+    J := 0;
+    while not Query.Eof do begin
+      Check(Query.Fields[0].AsString <> '');
+      Query.Next;
+      Inc(J);
+    end;
+    Query.Close;
+    Check(I = J, 'TestPassed');
+  finally
+    Query.Free;
+  end;
+end;
+
 {
 I'm using Firebird 2.5.2. This error appears for lazarus 1.0.12 (windows and linux) and delphi 7.
 INSERT with RETURNING works when executed Query.SQL.Text. If you do the Close and Open, the error is "Error Code: -502. The cursor identified in an OPEN statement is already open.".
@@ -760,6 +788,8 @@ begin
   finally
     Query.Free;
   end;
+
+  Check(True);
 end;
 
 {
@@ -831,6 +861,76 @@ begin
   end;
 end;
 
+procedure ZTestCompInterbaseBugReport.Test_SF249;
+var
+  Query: TZQuery;
+begin
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'select * from RDB$DATABASE where :TESTPARM=''''';
+    Query.ParamByName('TESTPARM').AsString := 'xyz';
+    try
+      Query.Open;
+      Fail('where clause evaulates to true although it shouldn''t: where :TESTPARM = ''''; testparm = ''xyz''');
+    except on E: Exception do
+      CheckNotTestFailure(E);
+    end;
+  finally
+    Query.Close;
+    Query.Free;
+  end;
+end;
+
+procedure ZTestCompInterbaseBugReport.Test_SF287;
+const
+  DateStr1 = '0018-07-02 19:00:00';
+  DateStr2 = '0018-07-01 05:00:00';
+  FormatStr = '';
+var
+  Query: TZQuery;
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings.DateSeparator := '-';
+  FormatSettings.TimeSeparator := ':';
+  FormatSettings.ShortDateFormat := 'yyyy/mm/dd';
+  FormatSettings.LongDateFormat := FormatSettings.ShortDateFormat;
+  FormatSettings.ShortTimeFormat := 'hh:nn:ss';
+  FormatSettings.LongTimeFormat := FormatSettings.ShortTimeFormat;
+
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'insert into date_values (d_id, d_datetime, d_timestamp) values (:id, cast(cast(:date1 as varchar(50)) as timestamp), :date2)';
+    Query.ParamByName('id').AsString := '1001';
+    Query.ParamByName('date1').AsString := DateStr1;
+    Query.ParamByName('date2').AsDateTime := StrToDateTime(DateStr1, FormatSettings);
+    Query.ExecSQL;
+
+    Query.SQL.Text := 'insert into date_values (d_id, d_datetime, d_timestamp) values (:id, cast(cast(:date1 as varchar(50)) as timestamp), :date2)';
+    Query.ParamByName('id').AsString := '1002';
+    Query.ParamByName('date1').AsString := DateStr2;
+    Query.ParamByName('date2').AsDateTime := StrToDateTime(DateStr2, FormatSettings);
+    Query.ExecSQL;
+
+    Query.SQL.Text := 'select * from date_values where d_id in (1001, 1002) order by d_id';
+    Query.Open;
+    CheckEquals(2, Query.RecordCount, 'Checking if the query returned two records.');
+    Query.First;
+    CheckEquals(DateStr1, DateTimeToStr(Query.FieldByName('d_datetime').AsDateTime, FormatSettings), 'Checking, if the first timestamp field has the expected value.');
+    CheckEquals(DateStr1, DateTimeToStr(Query.FieldByName('d_timestamp').AsDateTime, FormatSettings), 'Checking, if the second field is as expected.');
+    Query.Next;
+    CheckEquals(DateStr2, DateTimeToStr(Query.FieldByName('d_datetime').AsDateTime, FormatSettings), 'Checking, if the first timestamp field has the expected value.');
+    CheckEquals(DateStr2, DateTimeToStr(Query.FieldByName('d_timestamp').AsDateTime, FormatSettings), 'Checking, if the second timestamp field has the expected value.');
+  finally
+    try
+      Query.SQL.Text := 'delete from date_values where d_id in (1001, 1002)';
+      Query.ExecSQL;
+    finally
+      Query.Close;
+      Query.Free;
+    end;
+  end;
+end;
+
 { ZTestCompInterbaseBugReportMBCs }
 
 function ZTestCompInterbaseBugReportMBCs.GetSupportedProtocols: string;
@@ -888,9 +988,7 @@ begin
         CheckEquals(1, RowsAffected);
       except
         on E:Exception do
-        begin
           Fail('Param().LoadFromStream(StringStream, ftBlob): '+E.Message);
-        end;
       end;
     end;
   finally
@@ -947,7 +1045,7 @@ begin
         CheckEquals(1, RowsAffected);
       except
         on E:Exception do
-            Fail('Param().LoadFromStream(StringStream, ftMemo): '+E.Message);
+          Fail('Param().LoadFromStream(StringStream, ftMemo): '+E.Message);
       end;
     end;
   finally

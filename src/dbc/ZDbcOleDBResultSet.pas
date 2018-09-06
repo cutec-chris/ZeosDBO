@@ -55,18 +55,13 @@ interface
 
 {$I ZDbc.inc}
 
-{$IFDEF ENABLE_OLEDB}
-
 uses
 {$IFDEF USE_SYNCOMMONS}
-  SynCommons,
+  SynCommons, SynTable,
   {$ENDIF}
-{$IFNDEF FPC}
-  DateUtils,
-{$ENDIF}
   {$IFDEF WITH_TOBJECTLIST_INLINE}System.Types, System.Contnrs{$ELSE}Types{$ENDIF},
   Windows, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, ActiveX,
-  {$IFDEF OLD_FPC}ZClasses, {$ENDIF}ZSysUtils, ZDbcIntfs, ZDbcGenericResolver,
+  ZSysUtils, ZDbcIntfs, ZDbcGenericResolver,
   ZOleDB, ZDbcOleDBUtils,
   ZDbcCachedResultSet, ZDbcCache, ZDbcResultSet, ZDbcResultsetMetadata, ZCompatibility;
 
@@ -92,6 +87,9 @@ type
     FLobColsIndex: TIntegerDynArray;
     fpcColumns: DBORDINAL;
     fTempBlob: IZBlob;
+    {$IFDEF USE_SYNCOMMONS}
+    FTinyBuffer: array[0..30] of Byte;
+    {$ENDIF}
   private
     FData: Pointer;
     FLength: DBLENGTH;
@@ -102,7 +100,7 @@ type
   public
     constructor Create(const Statement: IZStatement; const SQL: string;
       const RowSet: IRowSet; ZBufferSize, ChunkSize: Integer; InMemoryDataLobs: Boolean;
-      const EnhancedColInfo: Boolean = True);
+      const {%H-}EnhancedColInfo: Boolean = True);
     procedure ResetCursor; override;
     function Next: Boolean; override;
     function IsNull(ColumnIndex: Integer): Boolean; override;
@@ -129,8 +127,7 @@ type
     function GetBlob(ColumnIndex: Integer): IZBlob; override;
 
     {$IFDEF USE_SYNCOMMONS}
-    procedure ColumnsToJSON(JSONWriter: TJSONWriter; EndJSONObject: Boolean = True;
-      With_DATETIME_MAGIC: Boolean = False; SkipNullFields: Boolean = False); override;
+    procedure ColumnsToJSON(JSONWriter: TJSONWriter; JSONComposeOptions: TZJSONComposeOptions); override;
     {$ENDIF USE_SYNCOMMONS}
   end;
 
@@ -176,29 +173,21 @@ function GetCurrentResultSet(const RowSet: IRowSet; const Statement: IZStatement
 
 implementation
 
-{$IFOPT R+}
-  {$DEFINE WITH_RANGE_CHECK}
-{$ENDIF}
-
 uses
-  Variants, Math, ComObj,
-  ZDbcOleDB, ZDbcOleDBStatement, ZMessages, ZEncoding, ZFastCode;
+  Variants, Math, {$IFDEF WITH_UNIT_NAMESPACES}System.Win.ComObj{$ELSE}ComObj{$ENDIF},
+  ZDbcOleDB, ZDbcOleDBStatement, ZMessages, ZEncoding, ZFastCode, ZClasses;
 
-{$IFOPT R+}
-  {$DEFINE WITH_RANGE_CHECK}
-{$ENDIF}
 var
   LobReadObj: TDBObject;
   LobDBBinding: TDBBinding;
 
-
 {$IFDEF USE_SYNCOMMONS}
 procedure TZOleDBResultSet.ColumnsToJSON(JSONWriter: TJSONWriter;
-  EndJSONObject: Boolean; With_DATETIME_MAGIC: Boolean; SkipNullFields: Boolean);
+  JSONComposeOptions: TZJSONComposeOptions);
 var I, C, L, H: Integer;
     P: PAnsiChar;
-    Len: NativeUInt;
     blob: IZBlob;
+    MS: Word;
 begin
   //init
   if JSONWriter.Expand then
@@ -212,7 +201,7 @@ begin
       C := JSONWriter.Fields[i];
     if IsNull(C+FirstDbcIndex) then
       if JSONWriter.Expand then begin
-        if (not SkipNullFields) then begin
+        if not (jcsSkipNulls in JSONComposeOptions) then begin
           JSONWriter.AddString(JSONWriter.ColNames[I]);
           JSONWriter.AddShort('null,')
         end;
@@ -315,44 +304,66 @@ begin
             JSONWriter.AddJSONEscapeW(PPointer(FData)^, FLength shr 1);
             JSONWriter.Add('"');
           end;
-        //DBTYPE_NUMERIC	= 131;
-        //DBTYPE_UDT	= 132;
+        //DBTYPE_NUMERIC  = 131;
+        //DBTYPE_UDT = 132;
         DBTYPE_DBDATE:    begin
-                            JSONWriter.Add('"');
-                            if With_DATETIME_MAGIC then
-                              JSONWriter.AddNoJSONEscapeUTF8(SynCommons.DateTimeToSQL(EncodeDate(Abs(PDBDate(FData)^.year), PDBDate(FData)^.month, PDBDate(FData)^.day)))
+                            if jcoMongoISODate in JSONComposeOptions then
+                              JSONWriter.AddShort('ISODate("')
+                            else if jcoDATETIME_MAGIC in JSONComposeOptions then
+                              JSONWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
                             else
-                              JSONWriter.AddDateTime(EncodeDate(Abs(PDBDate(FData)^.year), PDBDate(FData)^.month, PDBDate(FData)^.day));
                               JSONWriter.Add('"');
-                            end;
+                            if PDBDate(FData)^.year < 0 then
+                              JSONWriter.Add('-');
+                            DateToIso8601PChar(@FTinyBuffer[0], True, Abs(PDBDate(FData)^.year),
+                              PDBDate(FData)^.month, PDBDate(FData)^.day);
+                            JSONWriter.AddNoJSONEscape(@FTinyBuffer[0],10);
+                            if jcoMongoISODate in JSONComposeOptions
+                            then JSONWriter.AddShort('Z")')
+                            else JSONWriter.Add('"');
+                          end;
         DBTYPE_DBTIME:    begin
-                            JSONWriter.Add('"');
-                            if With_DATETIME_MAGIC then
-                              JSONWriter.AddNoJSONEscapeUTF8( SynCommons.DateTimeToSQL(EncodeTime(PDBTime(FData)^.hour, PDBTime(FData)^.minute, PDBTime(FData)^.second, 0)))
-                            else
-                              JSONWriter.AddDateTime(EncodeTime(PDBTime(FData)^.hour, PDBTime(FData)^.minute, PDBTime(FData)^.second, 0));
-                            JSONWriter.Add('"');
+                            if jcoMongoISODate in JSONComposeOptions then
+                              JSONWriter.AddShort('ISODate("0000-00-00')
+                            else if jcoDATETIME_MAGIC in JSONComposeOptions then begin
+                              JSONWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
+                            end else
+                              JSONWriter.Add('"');
+                            TimeToIso8601PChar(@FTinyBuffer[0], True, PDBTime(FData)^.hour,
+                              PDBTime(FData)^.minute, PDBTime(FData)^.second, 0, 'T', False);
+                            JSONWriter.AddNoJSONEscape(@FTinyBuffer[0],8+(4*Ord(jcoMilliseconds in JSONComposeOptions)));
+                            if jcoMongoISODate in JSONComposeOptions
+                            then JSONWriter.AddShort('Z)"')
+                            else JSONWriter.Add('"');
                           end;
         DBTYPE_DBTIMESTAMP: begin
-                              JSONWriter.Add('"');
-                              if With_DATETIME_MAGIC then
-                                JSONWriter.AddNoJSONEscapeUTF8(SynCommons.DateTimeToSQL(EncodeDate(Abs(PDBTimeStamp(FData)^.year), PDBTimeStamp(FData)^.month, PDBTimeStamp(FData)^.day)+
-                                  EncodeTime(PDBTimeStamp(FData)^.hour, PDBTimeStamp(FData)^.minute, PDBTimeStamp(FData)^.second, 0)))
-                                else
-                                  JSONWriter.AddDateTime((EncodeDate(Abs(PDBTimeStamp(FData)^.year), PDBTimeStamp(FData)^.month, PDBTimeStamp(FData)^.day)+
-                                    EncodeTime(PDBTimeStamp(FData)^.hour, PDBTimeStamp(FData)^.minute, PDBTimeStamp(FData)^.second, 0)));
-                              JSONWriter.Add('"');
+                              if jcoMongoISODate in JSONComposeOptions then
+                                JSONWriter.AddShort('ISODate("')
+                              else if jcoDATETIME_MAGIC in JSONComposeOptions then
+                                JSONWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
+                              else
+                                JSONWriter.Add('"');
+                              if PDBTimeStamp(FData)^.year < 0 then
+                                JSONWriter.Add('-');
+                              DateToIso8601PChar(@FTinyBuffer[0], True, Abs(PDBTimeStamp(FData)^.Year),
+                                 PDBTimeStamp(FData)^.Month, PDBTimeStamp(FData)^.Day);
+                              MS := (PDBTimeStamp(FData)^.fraction * Byte(ord(jcoMilliseconds in JSONComposeOptions))) div 1000000;
+                              TimeToIso8601PChar(@FTinyBuffer[10], True, PDBTimeStamp(FData)^.Hour,
+                                PDBTimeStamp(FData)^.Minute, PDBTimeStamp(FData)^.Second, MS, 'T', jcoMilliseconds in JSONComposeOptions);
+                              JSONWriter.AddNoJSONEscape(@FTinyBuffer[0],19+(4*Ord(jcoMilliseconds in JSONComposeOptions)));
+                              if jcoMongoISODate in JSONComposeOptions
+                              then JSONWriter.AddShort('Z")')
+                              else JSONWriter.Add('"');
                             end;
         DBTYPE_HCHAPTER:  JSONWriter.AddNoJSONEscapeUTF8(ZFastCode.IntToRaw(PCHAPTER(FData)^));
-        //DBTYPE_FILETIME	= 64;
-        //DBTYPE_PROPVARIANT	= 138;
-        //DBTYPE_VARNUMERIC	= 139;
+        //DBTYPE_FILETIME = 64;
+        //DBTYPE_PROPVARIANT = 138;
+        //DBTYPE_VARNUMERIC = 139;
       end;
       JSONWriter.Add(',');
     end;
   end;
-  if EndJSONObject then
-  begin
+  if jcoEndJSONObject in JSONComposeOptions then begin
     JSONWriter.CancelLastComma; // cancel last ','
     if JSONWriter.Expand then
       JSONWriter.Add('}');
@@ -454,7 +465,6 @@ begin
         ColumnInfo.ColumnLabel := 'col_'+ZFastCode.IntToStr(i)
       else
         ColumnInfo.ColumnLabel := String(prgInfo^.pwszName);
-      ColumnInfo.ColumnName := ColumnInfo.ColumnLabel;
       ColumnInfo.ColumnType := ConvertOleDBTypeToSQLType(prgInfo^.wType,
         prgInfo.dwFlags and DBCOLUMNFLAGS_ISLONG <> 0, ConSettings.CPType);
 
@@ -488,7 +498,7 @@ var
   FAccessorRefCount: DBREFCOUNT;
   i: Integer;
 begin
-  if not Closed then
+  if not Closed then begin
     try
       ReleaseFetchedRows;
       {first release Accessor rows}
@@ -504,8 +514,9 @@ begin
       FCurrentBufRowNo := 0;
       FRowsObtained := 0;
     end;
-  FRowSet := nil;//handle 'Object is in use Exception'
-  inherited ResetCursor;
+    FRowSet := nil;//handle 'Object is in use Exception'
+    inherited ResetCursor;
+  end;
 end;
 
 {**
@@ -619,7 +630,7 @@ begin
     //note FLength is valid only if DBPART_LENGTH was set in Bindings.dwFlags!!!
     FLength := PDBLENGTH(@FColBuffer[FDBBindingArray[ColumnIndex].obLength+NativeUInt(FRowSize*FCurrentBufRowNo)])^;
   end;
-  {$IFDEF WITH_RANGE_CHECK} {$R+} {$ENDIF}
+  {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
 end;
 
 {**
@@ -674,7 +685,7 @@ begin
         {$ENDIF}
       DBTYPE_IDISPATCH: Result := '';
       DBTYPE_ERROR:     Result := ZFastCode.IntToStr(PLongInt(FData)^);
-      DBTYPE_BOOL:      Result := {$IFDEF UNICODE}BoolToUnicodeEx{$ELSE}BoolToRawEx{$ENDIF}(PWordBool(FData)^);
+      DBTYPE_BOOL:      Result := BoolToStrEx(PWordBool(FData)^);
       DBTYPE_VARIANT:   Result := POleVariant(FData)^;
       DBTYPE_IUNKNOWN:  Result := '';
       //DBTYPE_DECIMAL	= 14;
@@ -684,7 +695,7 @@ begin
       DBTYPE_UI4:       Result := ZFastCode.IntToStr(PLongWord(FData)^);
       DBTYPE_I8:        Result := ZFastCode.IntToStr(PInt64(FData)^);
       DBTYPE_UI8:       Result := ZFastCode.IntToStr(PUInt64(FData)^);
-      DBTYPE_GUID:      Result := {$IFDEF UNICODE}GuidToUnicode{$ELSE}GuidToRaw{$ENDIF}(PGUID(FData)^);
+      DBTYPE_GUID:      Result := GUIDToStr(PGUID(FData)^);
       DBTYPE_BYTES, DBTYPE_BYTES or DBTYPE_BYREF:   Result := '';
       DBTYPE_STR:
         if FDBBindingArray[ColumnIndex{$IFNDEF GENERIC_INDEX}-1{$ENDIF}].cbMaxLen = 0 then
@@ -1133,7 +1144,7 @@ begin
       DBTYPE_UI4:       FUniTemp := ZFastCode.IntToUnicode(PLongWord(FData)^);
       DBTYPE_I8:        FUniTemp := ZFastCode.IntToUnicode(PInt64(FData)^);
       DBTYPE_UI8:       FUniTemp := ZFastCode.IntToUnicode(PUInt64(FData)^);
-      DBTYPE_GUID:      FUniTemp := GuidToUnicode(PGUID(FData)^);
+      DBTYPE_GUID:      FUniTemp := GUIDToUnicode(PGUID(FData)^);
       DBTYPE_STR:
         if FDBBindingArray[ColumnIndex{$IFNDEF GENERIC_INDEX}-1{$ENDIF}].cbMaxLen = 0 then
           FUniTemp := GetBlob(ColumnIndex).GetUnicodeString
@@ -1247,7 +1258,7 @@ begin
       DBTYPE_UI4:       Result := ZFastCode.IntToUnicode(PLongWord(FData)^);
       DBTYPE_I8:        Result := ZFastCode.IntToUnicode(PInt64(FData)^);
       DBTYPE_UI8:       Result := ZFastCode.IntToUnicode(PUInt64(FData)^);
-      DBTYPE_GUID:      Result := GuidToUnicode(PGUID(FData)^);
+      DBTYPE_GUID:      Result := GUIDToUnicode(PGUID(FData)^);
       DBTYPE_BYTES, DBTYPE_BYTES or DBTYPE_BYREF:   Result := '';
       DBTYPE_STR:
         if FDBBindingArray[ColumnIndex{$IFNDEF GENERIC_INDEX}-1{$ENDIF}].cbMaxLen = 0 then
@@ -1600,6 +1611,7 @@ end;
   @return the column value; if the value is SQL <code>NULL</code>, the
     value returned is <code>0</code>
 }
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 function TZOleDBResultSet.GetUInt(ColumnIndex: Integer): Cardinal;
 begin
   Result := 0;
@@ -1647,6 +1659,7 @@ begin
       //DBTYPE_VARNUMERIC = 139;
     end;
 end;
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 
 function TZOleDBResultSet.GetULong(ColumnIndex: Integer): UInt64;
 begin
@@ -1869,24 +1882,20 @@ begin
       DBTYPE_GUID:
         begin
           SetLength(Result, 16);
-          System.Move(Pointer(FData)^, Pointer(Result)^, 16);
+          PGUID(Result)^ := PGUID(FData)^;
         end;
       DBTYPE_GUID or DBTYPE_BYREF:
         begin
           SetLength(Result, 16);
-          System.Move(PPointer(FData)^^, Pointer(Result)^, 16);
+          PGUID(Result)^ := PGUID(PPointer(FData)^)^;
         end;
       DBTYPE_BYTES:
         begin
-          SetLength(Result, FLength);
-          System.Move(Pointer(FData)^,
-            Pointer(Result)^, FLength);
+          Result := BufferToBytes(FData, FLength);
         end;
       DBTYPE_BYTES or DBTYPE_BYREF:
         begin
-          SetLength(Result, FLength);
-          System.Move(PPointer(FData)^^,
-            Pointer(Result)^, FLength);
+          Result := BufferToBytes(PPointer(FData)^, FLength);
         end;
       else LastWasNull := True;
     end;
@@ -1922,9 +1931,9 @@ begin
         System.SetString(Result, PPAnsiChar(FData)^,
           FLength);*)
       DBTYPE_WSTR:
-        Result := UnicodeSQLDateToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLDateToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_WSTR or DBTYPE_BYREF:
-        Result := UnicodeSQLDateToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLDateToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_DBDATE:
         Result := EncodeDate(Abs(PDBDate(FData)^.year), PDBDate(FData)^.month,
           PDBDate(FData)^.day);
@@ -1972,9 +1981,9 @@ begin
         System.SetString(Result, PPAnsiChar(FData)^,
           FLength);*)
       DBTYPE_WSTR:
-        Result := UnicodeSQLTimeToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLTimeToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_WSTR or DBTYPE_BYREF:
-        Result := UnicodeSQLTimeToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLTimeToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_DBDATE: Result := 0;
       DBTYPE_DBTIME:
         Result := EncodeTime(PDBTime(FData)^.hour, PDBTime(FData)^.minute,
@@ -2024,9 +2033,9 @@ begin
         System.SetString(Result, PPAnsiChar(FData)^,
           FLength);*)
       DBTYPE_WSTR:
-        Result := UnicodeSQLTimeStampToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLTimeStampToDateTime(PWideChar(FData), FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_WSTR or DBTYPE_BYREF:
-        Result := UnicodeSQLTimeStampToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed{%H-});
+        Result := UnicodeSQLTimeStampToDateTime(ZPPWideChar(FData)^, FLength shr 1, ConSettings^.ReadFormatSettings, Failed);
       DBTYPE_DBDATE:
         Result := EncodeDate(Abs(PDBDate(FData)^.year), PDBDate(FData)^.month,
           PDBDate(FData)^.day);
@@ -2229,7 +2238,7 @@ begin
     if (Statement.GetResultSetConcurrency = rcUpdatable) or
        (Statement.GetResultSetType <> rtForwardOnly) then
     begin
-      if Statement.GetConnection.GetServerProvider = spMSSQL then
+      if (Statement.GetConnection.GetServerProvider = spMSSQL) and (Statement.GetResultSetConcurrency = rcUpdatable) then
         CachedResolver := TZOleDBMSSQLCachedResolver.Create(Statement, NativeResultSet.GetMetaData)
       else
         CachedResolver := TZGenericCachedResolver.Create(Statement, NativeResultSet.GetMetaData);
@@ -2413,13 +2422,4 @@ initialization
   LobDBBinding.wType := DBTYPE_IUNKNOWN;
   LobDBBinding.bPrecision := 0;
   LobDBBinding.bScale := 0;
-//(*
-{$ELSE !ENABLE_OLEDB}
-implementation
-{$ENDIF ENABLE_OLEDB}
-//*)
 end.
-
-
-
-

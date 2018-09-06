@@ -55,7 +55,6 @@ interface
 
 {$I ZDbc.inc}
 
-{$IF defined(ENABLE_ADO) or defined(ENABLE_OLEDB)}
 uses
   Types, SysUtils, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF}
   ZCompatibility, ZDbcIntfs, ZOleDB, ZVariant, ZDbcStatement, Variants;
@@ -94,9 +93,9 @@ function PrepareOleParamDBBindings(DBUPARAMS: DB_UPARAMS;
   var DBBindingArray: TDBBindingDynArray; const InParamTypes: TZSQLTypeArray;
   ParamInfoArray: PDBParamInfoArray; var TempLobs: TInterfacesDynArray): DBROWOFFSET;
 
-procedure InitOleParamDBBindings(var DBBindingArray: TDBParamInfoDynArray;
-  const InParamTypes: TZSQLTypeArray; InParamValues: TZVariantDynArray;
-  ClientVarManager: IZClientVariantManager);
+procedure InitOleParamDBBindings(out DBBindingArray: TDBParamInfoDynArray;
+  const InParamTypes: TZSQLTypeArray; const InParamValues: TZVariantDynArray;
+  const ClientVarManager: IZClientVariantManager);
 
 function PrepareOleColumnDBBindings(DBUPARAMS: DB_UPARAMS; InMemoryData: Boolean;
   var DBBindingArray: TDBBindingDynArray; DBCOLUMNINFO: PDBCOLUMNINFO;
@@ -121,9 +120,10 @@ function ProviderNamePrefix2ServerProvider(const ProviderNamePrefix: String): TZ
 implementation
 
 uses
-  {$ifdef WITH_SYSTEM_PREFIX}System.Win.ComObj,{$else}ComObj,{$endif}
+  {$IFDEF WITH_UNIT_NAMESPACES}System.Win.ComObj{$ELSE}ComObj{$ENDIF},
   ActiveX, Windows, Math, TypInfo,
-  ZEncoding, ZDbcLogging, ZDbcUtils, ZDbcResultSet, ZFastCode, ZSysUtils, ZMessages;
+  ZEncoding, ZDbcLogging, ZDbcUtils, ZDbcResultSet, ZFastCode, ZSysUtils, ZMessages,
+  ZClasses;
 
 function ConvertSQLTypeToOleDBType(SQLType: TZSQLType): DBTYPEENUM;
 begin
@@ -621,9 +621,9 @@ begin
   Result := DBBindingArray[DBUPARAMS -1].obValue + DBBindingArray[DBUPARAMS -1].cbMaxLen;
 end;
 
-procedure InitOleParamDBBindings(var DBBindingArray: TDBParamInfoDynArray;
-  const InParamTypes: TZSQLTypeArray; InParamValues: TZVariantDynArray;
-  ClientVarManager: IZClientVariantManager);
+procedure InitOleParamDBBindings(out DBBindingArray: TDBParamInfoDynArray;
+  const InParamTypes: TZSQLTypeArray; const InParamValues: TZVariantDynArray;
+  const ClientVarManager: IZClientVariantManager);
 var I: Integer;
 begin
   SetLength(DBBindingArray, Length(InParamTypes));
@@ -641,12 +641,69 @@ begin
       else if InParamTypes[i] = stBytes then
         DBBindingArray[i].ulParamSize := Min(255, Length(ClientVarManager.GetAsBytes(InParamValues[i])) shl 3 shr 1)
       else if InParamTypes[i] in [stAsciiStream, stUnicodeStream, stBinaryStream] then
-        DBBindingArray[i].dwFlags := DBBindingArray[i].dwFlags and DBPARAMFLAGS_ISLONG;
+        DBBindingArray[i].dwFlags := DBBindingArray[i].dwFlags or DBPARAMFLAGS_ISLONG;
     end;
   end;
 end;
 
 {$HINTS OFF}
+
+procedure ProcessUnicode(Data: NativeUInt; PLen: PDBLENGTH; ByRef: Boolean; Src: Pointer; CodePoints: Integer);
+begin
+  PLen^ := CodePoints*SizeOf(WideChar);
+  if ByRef then
+    if (Src = nil) or (CodePoints = 0) then
+      PPointer(Data)^ := PEmptyUnicodeString
+    else
+      PPointer(Data)^ := Src
+  else
+  begin
+    {set Reference Pointer first! see: PrepareOleDBBindings comment}
+    PNativeUInt(Data)^ := Data+SizeOf(Pointer);
+    if (Src = nil) or (CodePoints = 0) then
+      PWideChar(Data + SizeOf(Pointer))^ := #0
+    else
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Src^, Pointer(Data + SizeOf(Pointer))^, PLen^+SizeOf(WideChar));
+  end;
+end;
+
+procedure ProcessAnsi(Data: NativeUInt; PLen: PDBLENGTH; ByRef: Boolean; Src: Pointer; Len: Integer);
+begin
+  PLen^ := Len*SizeOf(AnsiChar);
+  if ByRef then
+    if (Src = nil) or (Len = 0) then
+      PPointer(Data)^ := PEmptyAnsiString
+    else
+      PPointer(Data)^ := Src
+  else
+  begin
+    {set Reference Pointer first! see: PrepareOleDBBindings comment}
+    PNativeUInt(Data)^ := Data +SizeOf(Pointer);
+    if (Src = nil) or (Len = 0) then
+      PAnsiChar(Data + SizeOf(Pointer))^ := #0
+    else
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Src^, Pointer(Data + SizeOf(Pointer))^, PLen^+SizeOf(AnsiChar));
+  end;
+end;
+
+procedure ProcessBinary(Data: NativeUInt; PLen: PDBLENGTH; ByRef: Boolean; Src: Pointer; Len: Cardinal);
+begin
+  PLen^ := Len;
+  if ByRef then
+    if (Src = nil) or (Len = 0) then
+      PPointer(Data)^ := nil
+    else
+      PPointer(Data)^ := Src
+  else
+  begin
+    PNativeUInt(Data)^ := Data+SizeOf(Pointer);
+    if (Src = nil) or (Len = 0) then
+      PPointer(Data + SizeOf(Pointer))^ := nil
+    else
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Src^, Pointer(Data + SizeOf(Pointer))^, PLen^);
+  end;
+end;
+
 procedure OleBindParams(const DBParams: TDBParams; ConSettings: PZConSettings;
   const DBBindingArray: TDBBindingDynArray; const InParamValues: TZVariantDynArray;
   const InParamTypes: TZSQLTypeArray; const ClientVarManager: IZClientVariantManager;
@@ -659,60 +716,6 @@ var
   GUID: TGUID;
   Data: NativeUInt;
   PLen: PDBLENGTH;
-
-  procedure ProcessUnicode(ByRef: Boolean; Src: Pointer; CodePoints: Integer);
-  begin
-    PLen^ := CodePoints shl 1;
-    if ByRef then
-      if (Src = nil) or (CodePoints = 0) then
-        PPointer(Data)^ := PEmptyUnicodeString
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      {set Reference Pointer first! see: PrepareOleDBBindings comment}
-      PNativeUInt(Data)^ := Data+SizeOf(Pointer);
-      if (Src = nil) or (CodePoints = 0) then
-        PWideChar(Data + SizeOf(Pointer))^ := #0
-      else
-        System.Move(Src^, Pointer(Data +SizeOf(Pointer))^, PLen^+2);
-    end;
-  end;
-  procedure ProcessAnsi(ByRef: Boolean; Src: Pointer; Len: Integer);
-  begin
-    PLen^ := Len;
-    if ByRef then
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data)^ := PEmptyAnsiString
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      {set Reference Pointer first! see: PrepareOleDBBindings comment}
-      PNativeUInt(Data)^ := Data +SizeOf(Pointer);
-      if (Src = nil) or (Len = 0) then
-        PAnsiChar(Data + SizeOf(Pointer))^ := #0
-      else
-        System.Move(Src^, Pointer(Data + SizeOf(Pointer))^, Len + 1);
-    end;
-  end;
-  procedure ProcessBinary(ByRef: Boolean; Src: Pointer; Len: Cardinal);
-  begin
-    PLen^ := Len;
-    if ByRef then
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data)^ := nil
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      PNativeUInt(Data)^ := Data+SizeOf(Pointer);
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data+ SizeOf(Pointer))^ := nil
-      else
-        System.Move(Src^, Pointer(Data+ SizeOf(Pointer))^, Len);
-    end;
-  end;
 begin
   //http://technet.microsoft.com/de-de/library/ms174522%28v=sql.110%29.aspx
   for i := 0 to High(InParamValues) do
@@ -746,12 +749,12 @@ begin
         DBTYPE_UI8:       PUInt64(Data)^ := ClientVarManager.GetAsUInteger(InParamValues[i]);
         DBTYPE_GUID or DBTYPE_BYREF:
           if InParamValues[i].vType = vtBytes then
-            ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), Pointer(InParamValues[i].vBytes), 16)
+            ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), Pointer(InParamValues[i].vBytes), 16)
           else
             if InParamValues[i].vType in [vtString, vtAnsiString, vtUTF8String, vtRawByteString, vtUnicodeString] then
             begin
               GUID := StringToGUID(ClientVarManager.GetAsString(InParamValues[i]));
-              ProcessBinary(False, @GUID.D1, 16)
+              ProcessBinary(Data, PLen, False, @GUID.D1, 16)
             end
             else
               raise EZSQLException.Create(IntToStr(Ord(InParamTypes[i]))+' '+SUnsupportedParameterType);
@@ -760,33 +763,33 @@ begin
             if (InParamValues[i].vType = vtInterface) then
             begin
               TempBlob := InParamValues[i].vInterface as IZBLob;
-              ProcessBinary(True, TempBlob.GetBuffer, TempBlob.Length);
+              ProcessBinary(Data, PLen, True, TempBlob.GetBuffer, TempBlob.Length);
             end
             else
               if InParamValues[i].vType = vtBytes then
-                ProcessBinary(True, Pointer(InParamValues[i].vBytes), Length(InParamValues[i].vBytes))
+                ProcessBinary(Data, PLen, True, Pointer(InParamValues[i].vBytes), Length(InParamValues[i].vBytes))
               else
               begin
                 InParamValues[i] := ClientVarManager.Convert(InParamValues[i], vtBytes);
-                ProcessBinary(True,
+                ProcessBinary(Data, PLen, True,
                   Pointer(InParamValues[i].vBytes), Length(InParamValues[i].vBytes));
               end
           else
             if (InParamValues[i].vType = vtInterface) then
             begin
               TempBlob := InParamValues[i].vInterface as IZBLob;
-              ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+              ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                 TempBlob.GetBuffer, {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, TempBlob.Length));
             end
             else
               if InParamValues[i].vType = vtBytes then
-                ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   Pointer(InParamValues[i].vBytes),
                   {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen,NativeUInt(Length(InParamValues[i].vBytes))))
               else
               begin
                 InParamValues[i] := ClientVarManager.Convert(InParamValues[i], vtBytes);
-                ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   Pointer(InParamValues[i].vBytes),
                   {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, NativeUInt(Length(InParamValues[i].vBytes))));
               end;
@@ -798,19 +801,19 @@ begin
               if TempBlob.IsClob then
               begin
                 TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP);
-                ProcessAnsi(True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
+                ProcessAnsi(Data, PLen, True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
               end
               else
               begin
                 InParamValues[i].VRawByteString := GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
                   TempBlob.Length, ConSettings);
-                ProcessAnsi(True, Pointer(InParamValues[i].VRawByteString), Length(InParamValues[i].VRawByteString));
+                ProcessAnsi(Data, PLen, True, Pointer(InParamValues[i].VRawByteString), Length(InParamValues[i].VRawByteString));
               end;
             end
             else
             begin
               InParamValues[i].VRawByteString := ClientVarManager.GetAsRawByteString(InParamValues[i]);
-              ProcessAnsi(True, Pointer(InParamValues[i].VRawByteString), Length(InParamValues[i].VRawByteString));
+              ProcessAnsi(Data, PLen, True, Pointer(InParamValues[i].VRawByteString), Length(InParamValues[i].VRawByteString));
             end
           else
             if (InParamValues[i].vType = vtInterface) then
@@ -819,7 +822,7 @@ begin
               if TempBlob.IsClob then
               begin
                 TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP);
-                ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP),
                     {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, TempBlob.Length));
               end
@@ -827,7 +830,7 @@ begin
               begin
                 InParamValues[i].VRawByteString := GetValidatedAnsiStringFromBuffer(
                   TempBlob.GetBuffer, TempBlob.Length, ConSettings);
-                ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   Pointer(InParamValues[i].VRawByteString),
                   {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, Length(InParamValues[i].VRawByteString)));
               end;
@@ -835,19 +838,19 @@ begin
             else
             begin
               InParamValues[i].VRawByteString := ClientVarManager.GetAsRawByteString(InParamValues[i]);
-              ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+              ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                 Pointer(InParamValues[i].VRawByteString),
                 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, Length(InParamValues[i].VRawByteString)));
             end;
         DBTYPE_WSTR or DBTYPE_BYREF:
-          if (DBBindingArray[i].dwFlags and DBPARAMFLAGS_ISLONG <> 0) then //insi lob's!!!
+          if (DBBindingArray[i].dwFlags and DBPARAMFLAGS_ISLONG <> 0) then //Unicode lob's!!!
             if (InParamValues[i].vType = vtInterface) then
             begin
               TempBlob := InParamValues[i].vInterface as IZBLob;
               if TempBlob.IsClob then
               begin
                 TempBlob.GetPWideChar;
-                ProcessUnicode(True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
+                ProcessUnicode(Data, PLen, True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
               end
               else
               begin
@@ -855,13 +858,13 @@ begin
                 TempBlob := TZAbstractClob.CreateWithStream(TmpStream, zCP_UTF16, ConSettings);
                 InParamValues[i].vInterface := TempBlob;
                 TmpStream.Free;
-                ProcessUnicode(True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
+                ProcessUnicode(Data, PLen, True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
               end;
             end
             else
             begin
               InParamValues[i].VUnicodeString := ClientVarManager.GetAsUnicodeString(InParamValues[i]);
-              ProcessUnicode(True, Pointer(InParamValues[i].VUnicodeString), Length(InParamValues[i].VUnicodeString));
+              ProcessUnicode(Data, PLen, True, Pointer(InParamValues[i].VUnicodeString), Length(InParamValues[i].VUnicodeString));
             end
           else
             if (InParamValues[i].vType = vtInterface) then
@@ -870,7 +873,7 @@ begin
               if TempBlob.IsClob then
               begin
                 TempBlob.GetPWideChar;
-                ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   TempBlob.GetPWideChar,
                   {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1)-1, TempBlob.Length shr 1));
               end
@@ -880,7 +883,7 @@ begin
                 TempBlob := TZAbstractClob.CreateWithStream(TmpStream, zCP_UTF16, ConSettings);
                 InParamValues[i].vInterface := TempBlob;
                 TmpStream.Free;
-                ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                   TempBlob.GetPWideChar,
                   {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1)-1, TempBlob.Length shr 1));
               end;
@@ -888,7 +891,7 @@ begin
             else
             begin
               InParamValues[i].VUnicodeString := ClientVarManager.GetAsUnicodeString(InParamValues[i]);
-              ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+              ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                 Pointer(InParamValues[i].VUnicodeString),
                 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1)-1, Length(InParamValues[i].VUnicodeString)));
             end;
@@ -935,6 +938,7 @@ begin
   end;
 end;
 
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 procedure OleBindArrayParams(const DBParams: TDBParams; ArrayOffSet: DB_UPARAMS;
   RowSize: NativeUInt; ConSettings: PZConSettings;
   const DBBindingArray: TDBBindingDynArray; const ClientVarManager: IZClientVariantManager;
@@ -982,60 +986,6 @@ var
 
   Data: NativeUInt;
   PLen: PDBLENGTH;
-
-  procedure ProcessUnicode(ByRef: Boolean; Src: Pointer; CodePoints: Integer);
-  begin
-    PLen^ := CodePoints shl 1;
-    if ByRef then
-      if (Src = nil) or (CodePoints = 0) then
-        PPointer(Data)^ := PEmptyUnicodeString
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      {set Reference Pointer first! see: PrepareOleDBBindings comment}
-      PNativeUInt(Data)^ := Data+SizeOf(Pointer);
-      if (Src = nil) or (CodePoints = 0) then
-        PWideChar(Data + SizeOf(Pointer))^ := #0
-      else
-        System.Move(Src^, Pointer(Data +SizeOf(Pointer))^, PLen^+2);
-    end;
-  end;
-  procedure ProcessAnsi(ByRef: Boolean; Src: Pointer; Len: Integer);
-  begin
-    PLen^ := Len;
-    if ByRef then
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data)^ := PEmptyAnsiString
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      {set Reference Pointer first! see: PrepareOleDBBindings comment}
-      PNativeUInt(Data)^ := Data +SizeOf(Pointer);
-      if (Src = nil) or (Len = 0) then
-        PAnsiChar(Data + SizeOf(Pointer))^ := #0
-      else
-        System.Move(Src^, Pointer(Data + SizeOf(Pointer))^, Len + 1);
-    end;
-  end;
-  procedure ProcessBinary(ByRef: Boolean; Src: Pointer; Len: Cardinal);
-  begin
-    PLen^ := Len;
-    if ByRef then
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data)^ := nil
-      else
-        PPointer(Data)^ := Src
-    else
-    begin
-      PNativeUInt(Data)^ := Data+SizeOf(Pointer);
-      if (Src = nil) or (Len = 0) then
-        PPointer(Data+ SizeOf(Pointer))^ := nil
-      else
-        System.Move(Src^, Pointer(Data+ SizeOf(Pointer))^, Len);
-    end;
-  end;
 
   function IsNullFromIndicator: Boolean;
   begin
@@ -1539,9 +1489,9 @@ begin
           DBTYPE_GUID or DBTYPE_BYREF: //GUID
             case SQLType of
               stGUID:
-                ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), @ZGUIDArray[ArrayOffSet].D1, 16);
+                ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), @ZGUIDArray[ArrayOffSet].D1, 16);
               stBytes:
-                ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), Pointer(InParamValues[i].vBytes), 16);
+                ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0), Pointer(InParamValues[i].vBytes), 16);
               stString, stUnicodeString:
                 begin
                   case InParamValues[i].VArray.VArrayVariantType of
@@ -1559,7 +1509,7 @@ begin
                     else
                       raise Exception.Create('Unsupported String Variant');
                   end;
-                  ProcessBinary(False, @GUID.D1, 16)
+                  ProcessBinary(Data, PLen, False, @GUID.D1, 16)
                 end;
               else
                 raise EZSQLException.Create('Unsupported GUID Variant');
@@ -1570,12 +1520,12 @@ begin
                 stBinaryStream:
                   begin
                     TempBlob := ZInterfaceArray[ArrayOffSet] as IZBLob;
-                    ProcessBinary(True, TempBlob.GetBuffer, TempBlob.Length);
+                    ProcessBinary(Data, PLen, True, TempBlob.GetBuffer, TempBlob.Length);
                   end;
                 stBytes:
-                  ProcessBinary(True, Pointer(ZBytesArray[ArrayOffSet]), Length(ZBytesArray[ArrayOffSet]));
+                  ProcessBinary(Data, PLen, True, Pointer(ZBytesArray[ArrayOffSet]), Length(ZBytesArray[ArrayOffSet]));
                 stGUID:
-                  ProcessBinary(True, @ZGUIDArray[ArrayOffSet].D1, 16);
+                  ProcessBinary(Data, PLen, True, @ZGUIDArray[ArrayOffSet].D1, 16);
                 else
                   raise Exception.Create('Unsupported Byte-Array Variant');
               end
@@ -1584,15 +1534,15 @@ begin
                 stBinaryStream:
                   begin
                     TempBlob := ZInterfaceArray[ArrayOffSet] as IZBLob;
-                    ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                    ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                       TempBlob.GetBuffer, {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, TempBlob.Length));
                   end;
                 stBytes:
-                  ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                  ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                     Pointer(ZBytesArray[ArrayOffSet]),
                     {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen,NativeUInt(Length(ZBytesArray[ArrayOffSet]))));
                 stGUID:
-                  ProcessBinary((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                  ProcessBinary(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                     @ZGUIDArray[ArrayOffSet].D1, {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, 16));
                 else
                   raise Exception.Create('Unsupported Byte-Array Variant');
@@ -1648,13 +1598,13 @@ begin
                     if TempBlob.IsClob then
                     begin
                       TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP); //
-                      ProcessAnsi(True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
+                      ProcessAnsi(Data, PLen, True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
                     end
                     else
                     begin
                       TempBlob.SetAnsiString(GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
                         TempBlob.Length, ConSettings));
-                      ProcessAnsi(True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
+                      ProcessAnsi(Data, PLen, True, TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP), TempBlob.Length);
                     end;
                     Continue;
                   end;
@@ -1664,7 +1614,7 @@ begin
               {we need a temporary storage -> we only reference lob pointers }
               TempBlob := TZAbstractCLob.CreateWithData(PAnsiChar(AnsiTemp), Length(AnsiTemp), GetAcp, ConSettings);
               TempLobs[TempLobOffSet][ArrayOffSet] := TempBlob;
-              ProcessAnsi(True, TempBlob.GetBuffer, TempBlob.Length);
+              ProcessAnsi(Data, PLen, True, TempBlob.GetBuffer, TempBlob.Length);
               Inc(TempLobOffSet);
             end
             else
@@ -1691,7 +1641,7 @@ begin
                     vtString: AnsiTemp := ConSettings^.ConvFuncs.ZStringToAnsi(ZStringArray[ArrayOffSet], ConSettings^.CTRL_CP);
                     vtAnsiString:
                       begin
-                        ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           Pointer(ZAnsiStringArray[ArrayOffSet]),
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, Length(ZAnsiStringArray[ArrayOffSet])));
                         Continue;
@@ -1699,7 +1649,7 @@ begin
                     vtUTF8String: AnsiTemp := ZConvertUTF8ToAnsi(ZUTF8StringArray[ArrayOffSet]);
                     vtRawByteString:
                       begin
-                        ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           Pointer(ZRawByteStringArray[ArrayOffSet]),
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, Length(ZRawByteStringArray[ArrayOffSet])));
                         Continue;
@@ -1708,7 +1658,7 @@ begin
                     vtCharRec:
                       if ZCompatibleCodePages(ZCharRecArray[ArrayOffSet].CP, GetACP) then
                       begin
-                        ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           ZCharRecArray[ArrayOffSet].P,
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, ZCharRecArray[ArrayOffSet].Len));
                         continue;
@@ -1730,7 +1680,7 @@ begin
                     if TempBlob.IsClob then
                     begin
                       TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP); //make internal conversion first
-                      ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                      ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                         TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP),
                         {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, TempBlob.Length));
                     end
@@ -1738,7 +1688,7 @@ begin
                     begin
                       TempBlob.SetAnsiString(GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
                         TempBlob.Length, ConSettings));
-                      ProcessAnsi((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                      ProcessAnsi(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                         TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage^.CP),
                         {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen, TempBlob.Length));
                     end;
@@ -1747,7 +1697,7 @@ begin
                 else
                   raise Exception.Create('Unsupported AnsiString-Array Variant');
               end;
-              ProcessAnsi(False, Pointer(AnsiTemp), //converted values can't be referenced
+              ProcessAnsi(Data, PLen, False, Pointer(AnsiTemp), //converted values can't be referenced
                 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(DBBindingArray[I].cbMaxLen-1, Length(AnsiTemp)));
             end;
           DBTYPE_WSTR or DBTYPE_BYREF:
@@ -1806,7 +1756,7 @@ begin
                       InParamValues[i].vInterface := TempBlob; //keep mem alive!
                       TmpStream.Free;
                     end;
-                    ProcessUnicode(True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
+                    ProcessUnicode(Data, PLen, True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
                     Continue;
                   end;
                 else
@@ -1815,7 +1765,7 @@ begin
               {we need a temporary storage -> we only reference lob pointers }
               TempBlob := TZAbstractCLob.CreateWithData(PWideChar(UniTemp), Length(UniTemp), ConSettings);
               TempLobs[TempLobOffSet][ArrayOffSet] := TempBlob;
-              ProcessUnicode(True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
+              ProcessUnicode(Data, PLen, True, TempBlob.GetPWideChar, TempBlob.Length shr 1);
               Inc(TempLobOffSet);
             end
             else
@@ -1842,7 +1792,7 @@ begin
                     vtString:
                       {$IFDEF UNICODE}
                       begin
-                        ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           Pointer(ZStringArray[ArrayOffSet]),
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1) -1, Length(ZStringArray[ArrayOffSet])));
                         continue;
@@ -1855,7 +1805,7 @@ begin
                     vtRawByteString: UniTemp := ConSettings.ConvFuncs.ZRawToUnicode(ZRawByteStringArray[ArrayOffSet], ConSettings^.ClientCodePage^.CP);
                     vtUnicodeString:
                       begin
-                        ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           Pointer(ZUnicodeStringArray[ArrayOffSet]),
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1) -1, Length(ZUnicodeStringArray[ArrayOffSet])));
                         continue;
@@ -1863,7 +1813,7 @@ begin
                     vtCharRec:
                       if ZCompatibleCodePages(ZCharRecArray[ArrayOffSet].CP, zCP_UTF16) then
                       begin
-                        ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                        ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                           ZCharRecArray[ArrayOffSet].P,
                           {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1) -1, ZCharRecArray[ArrayOffSet].Len));
                         continue;
@@ -1885,7 +1835,7 @@ begin
                       InParamValues[i].vInterface := TempBlob; //keep mem alive!
                       TmpStream.Free;
                     end;
-                    ProcessUnicode((DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
+                    ProcessUnicode(Data, PLen, (DBBindingArray[i].eParamIO and DBPARAMIO_OUTPUT = 0),
                       TempBlob.GetPWideChar,
                       {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1) -1, TempBlob.Length shr 1));
                     Continue;
@@ -1893,7 +1843,7 @@ begin
                 else
                   raise Exception.Create('Unsupported AnsiString-Array Variant');
               end;
-              ProcessUnicode(False, Pointer(UniTemp),
+              ProcessUnicode(Data, PLen, False, Pointer(UniTemp),
                 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min((DBBindingArray[I].cbMaxLen shr 1)-1, Length(UniTemp)));
             end;
           DBTYPE_DBDATE:
@@ -2079,6 +2029,7 @@ begin
     Inc(BuffOffSet, RowSize);
   end;
 end;
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
 {$HINTS ON}
 
 procedure SetOleCommandProperties(const Command: ICommandText; TimeOut: SmallInt;
@@ -2187,9 +2138,4 @@ begin
     end;
 end;
 
-//(*
-{$ELSE}
-implementation
-{$IFEND}
-//*)
 end.

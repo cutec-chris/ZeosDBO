@@ -63,7 +63,6 @@ uses
 type
 
   {** Implements SQLite Database Driver. }
-  {$WARNINGS OFF}
   TZSQLiteDriver = class(TZAbstractDriver)
   public
     constructor Create; override;
@@ -74,12 +73,10 @@ type
     function GetTokenizer: IZTokenizer; override;
     function GetStatementAnalyser: IZStatementAnalyser; override;
   end;
-  {$WARNINGS ON}
 
   {** Represents a SQLite specific connection interface. }
   IZSQLiteConnection = interface (IZConnection)
     ['{A4B797A9-7CF7-4DE9-A5BB-693DD32D07D2}']
-    function GetPlainDriver: IZSQLitePlainDriver;
     function GetConnectionHandle: Psqlite;
     function GetUndefinedVarcharAsStringLength: Integer;
   end;
@@ -87,12 +84,20 @@ type
   {** Implements SQLite Database Connection. }
 
   { TZSQLiteConnection }
-
-  TZSQLiteConnection = class(TZAbstractConnection, IZSQLiteConnection)
+  TSQLite3TransactionAction = (traBegin, traCommit, traRollBack);
+  TSQLite3TransactionStmt = record
+    Stmt: Psqlite3_stmt;
+    SQL: RawByteString;
+    nBytes: Integer;
+  end;
+  TZSQLiteConnection = class(TZAbstractDbcConnection, IZSQLiteConnection)
   private
     FUndefinedVarcharAsStringLength: Integer;
     FCatalog: string;
     FHandle: Psqlite;
+    FPlainDriver: TZSQLitePlainDriver;
+    FTransactionStmts: array[TSQLite3TransactionAction] of TSQLite3TransactionStmt;
+    procedure ExecTransactionStmt(Action: TSQLite3TransactionAction);
   protected
     procedure InternalCreate; override;
     procedure StartTransactionSupport;
@@ -106,7 +111,9 @@ type
     procedure Rollback; override;
 
     procedure Open; override;
-    procedure Close; override;
+    procedure InternalClose; override;
+
+    procedure SetAutoCommit(Value: Boolean); override;
 
     procedure SetCatalog(const Catalog: string); override;
     function GetCatalog: string; override;
@@ -116,7 +123,6 @@ type
     function GetClientVersion: Integer; override;
     function GetHostVersion: Integer; override;
 
-    function GetPlainDriver: IZSQLitePlainDriver;
     function GetConnectionHandle: Psqlite;
 
     function ReKey(const Key: string): Integer;
@@ -133,7 +139,7 @@ implementation
 
 uses
   ZSysUtils, ZDbcSqLiteStatement, ZSqLiteToken, ZFastCode, ZDbcProperties,
-  ZDbcSqLiteUtils, ZDbcSqLiteMetadata, ZSqLiteAnalyser
+  ZDbcSqLiteUtils, ZDbcSqLiteMetadata, ZSqLiteAnalyser, ZEncoding, ZMessages
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 { TZSQLiteDriver }
@@ -171,12 +177,10 @@ end;
   @return a <code>Connection</code> object that represents a
     connection to the URL
 }
-{$WARNINGS OFF}
 function TZSQLiteDriver.Connect(const Url: TZURL): IZConnection;
 begin
   Result := TZSQLiteConnection.Create(Url);
 end;
-{$WARNINGS ON}
 
 {**
   Gets the driver's major version number. Initially this should be 1.
@@ -221,12 +225,18 @@ end;
 }
 procedure TZSQLiteConnection.InternalCreate;
 begin
+  FPlainDriver := TZSQLitePlainDriver(PlainDriver.GetInstance);
   FMetadata := TZSQLiteDatabaseMetadata.Create(Self, Url);
-  AutoCommit := True;
-  TransactIsolationLevel := tiNone;
+  //https://sqlite.org/pragma.html#pragma_read_uncommitted
+  inherited SetTransactionIsolation(tiSerializable);
   CheckCharEncoding('UTF-8');
   FUndefinedVarcharAsStringLength := StrToIntDef(Info.Values[DSProps_UndefVarcharAsStringLength], 0);
-  Open;
+  FTransactionStmts[traBegin].SQL := 'BEGIN TRANSACTION';
+  FTransactionStmts[traBegin].nBytes := Length(FTransactionStmts[traBegin].SQL);
+  FTransactionStmts[traCommit].SQL := 'COMMIT TRANSACTION';
+  FTransactionStmts[traCommit].nBytes := Length(FTransactionStmts[traCommit].SQL);
+  FTransactionStmts[traRollBack].SQL := 'ROLLBACK TRANSACTION';
+  FTransactionStmts[traRollBack].nBytes := Length(FTransactionStmts[traRollBack].SQL);
 end;
 
 {**
@@ -237,11 +247,15 @@ end;
 function TZSQLiteConnection.Key(const Key: string):Integer;
 var
   ErrorCode: Integer;
+  {$IFDEF UNICODE}
+  Raw: UTF8String;
+  {$ENDIF}
 begin
   {$IFDEF UNICODE}
-  ErrorCode := GetPlainDriver.Key(FHandle, PAnsiChar(UTF8String(Key)), ZFastCode.StrLen(PAnsiChar(UTF8String(Key))));
+  Raw := UTF8String(Key);
+  ErrorCode := FPlainDriver.sqlite3_key(FHandle, Pointer(Raw), Length(Raw));
   {$ELSE}
-  ErrorCode := GetPlainDriver.Key(FHandle, PAnsiChar(Key), ZFastCode.StrLen(PAnsiChar(Key)));
+  ErrorCode := FPlainDriver.sqlite3_key(FHandle, Pointer(Key), Length(Key));
   {$ENDIF}
   Result := ErrorCode;
 end;
@@ -255,11 +269,15 @@ end;
 function TZSQLiteConnection.ReKey(const Key: string):Integer;
 var
   ErrorCode: Integer;
+  {$IFDEF UNICODE}
+  Raw: UTF8String;
+  {$ENDIF}
 begin
   {$IFDEF UNICODE}
-  ErrorCode := GetPlainDriver.ReKey(FHandle, PAnsiChar(UTF8String(Key)), ZFastCode.StrLen(PAnsiChar(UTF8String(Key))));
+  Raw := UTF8String(Key);
+  ErrorCode := FPlainDriver.sqlite3_rekey(FHandle, Pointer(Raw), Length(Raw));
   {$ELSE}
-  ErrorCode := GetPlainDriver.ReKey(FHandle, PAnsiChar(Key), ZFastCode.StrLen(PAnsiChar(Key)));
+  ErrorCode := FPlainDriver.sqlite3_rekey(FHandle, Pointer(Key), Length(Key));
   {$ENDIF}
   Result := ErrorCode;
 end;
@@ -269,84 +287,74 @@ end;
 }
 procedure TZSQLiteConnection.Open;
 var
-  ErrorCode: Integer;
-  ErrorMessage: PAnsiChar;
   LogMessage: RawByteString;
   SQL: RawByteString;
   TmpInt: Integer;
+  Stmt: IZStatement;
 begin
   if not Closed then
     Exit;
-  ErrorMessage := '';
 
   LogMessage := 'CONNECT TO "'+ConSettings^.Database+'" AS USER "'+ConSettings^.User+'"';
-
-  SQL := {$IFDEF UNICODE}UTF8String{$ENDIF}(Database);
-  FHandle := GetPlainDriver.Open(Pointer(SQL));
+  {$IFDEF UNICODE}
+  SQL := ZUnicodeToRaw(DataBase, zCP_UTF8);
+  {$ELSE}
+    {$IFDEF LCL}
+    SQL := DataBase;
+    {$ELSE}
+    if ZEncoding.ZDetectUTF8Encoding(Pointer(DataBase), Length(DataBase)) = etANSI
+    then SQL := ConSettings.ConvFuncs.ZStringToUTF8(DataBase, zOSCodePage)
+    else SQL := DataBase;
+    {$ENDIF}
+  {$ENDIF}
+  FPlainDriver.sqlite3_open(Pointer(SQL), FHandle);
   if FHandle = nil then
-    CheckSQLiteError(GetPlainDriver, FHandle, SQLITE_ERROR, nil, lcConnect, LogMessage, ConSettings);
+    CheckSQLiteError(FPlainDriver, FHandle, SQLITE_ERROR, lcConnect, LogMessage, ConSettings);
   DriverManager.LogMessage(lcConnect, ConSettings^.Protocol, LogMessage);
 
   { Turn on encryption if requested }
-  if StrToBoolEx(Info.Values[ConnProps_Encrypted]) then
+  if StrToBoolEx(Info.Values[ConnProps_Encrypted]) and Assigned(FPlainDriver.sqlite3_key) then
   begin
     SQL := {$IFDEF UNICODE}UTF8String{$ENDIF}(Password);
-    ErrorCode := GetPlainDriver.Key(FHandle, Pointer(SQL), Length(SQL));
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, nil, lcConnect, 'SQLite.Key', ConSettings);
+    if Assigned(FPlainDriver.sqlite3_key) then
+    CheckSQLiteError(FPlainDriver, FHandle,
+      FPlainDriver.sqlite3_key(FHandle, Pointer(SQL), Length(SQL)),
+      lcConnect, 'SQLite.Key', ConSettings);
   end;
 
   { Set busy timeout if requested }
   TmpInt := StrToIntDef(Info.Values[ConnProps_BusyTimeout], -1);
   if TmpInt >= 0 then
-    GetPlainDriver.BusyTimeout(FHandle, TmpInt);
-
-  { pimp performance }
-  SQL := 'PRAGMA cache_size = '+IntToRaw(StrToIntDef(Info.Values[ConnProps_CacheSize], 10000));
-  ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-  CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-
-  if Info.Values[ConnProps_Synchronous] <> '' then //see http://www.sqlite.org/pragma.html#pragma_synchronous
-  begin  //0 brings best performance
-    SQL := 'PRAGMA synchronous = '+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(Info.Values[ConnProps_Synchronous]);
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-  end;
-
-  if Info.Values[ConnProps_LockingMode] <> '' then //see http://www.sqlite.org/pragma.html#pragma_locking_mode
-  begin //EXCLUSIVE brings best performance
-    SQL := 'PRAGMA locking_mode = '+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(Info.Values[ConnProps_LockingMode]);
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-  end;
-
-  try
-    if ( FClientCodePage <> '' ) then
-    begin
-      SQL := 'PRAGMA encoding = '''+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(FClientCodePage)+'''';
-      ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-      CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-    end;
-
-    SQL := 'PRAGMA show_datatypes = ON';
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-
-    if Info.Values[ConnProps_ForeignKeys] <> '' then
-    begin
-      SQL := 'PRAGMA foreign_keys = ' +
-        BoolStrIntsRaw[StrToBoolEx(Info.Values[ConnProps_ForeignKeys])];
-      ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-      CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-      DriverManager.LogMessage(lcConnect, ConSettings^.Protocol, SQL);
-    end;
-    StartTransactionSupport;
-  except
-    GetPlainDriver.Close(FHandle);
-    FHandle := nil;
-    raise;
-  end;
+    FPlainDriver.sqlite3_busy_timeout(FHandle, TmpInt);
 
   inherited Open;
+
+  Stmt := TZSQLiteStatement.Create(Self, Info, FHandle);
+  { pimp performance }
+  Stmt.ExecuteUpdate('PRAGMA cache_size = '+IntToRaw(StrToIntDef(Info.Values[ConnProps_CacheSize], 10000)));
+
+  //see http://www.sqlite.org/pragma.html#pragma_synchronous
+  //0 brings best performance
+  if Info.Values[ConnProps_Synchronous] <> '' then
+    Stmt.ExecuteUpdate('PRAGMA synchronous = '+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(Info.Values[ConnProps_Synchronous]));
+
+  //see http://www.sqlite.org/pragma.html#pragma_locking_mode
+  //EXCLUSIVE brings best performance
+  if Info.Values[ConnProps_LockingMode] <> '' then
+    Stmt.ExecuteUpdate('PRAGMA locking_mode = '+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(Info.Values[ConnProps_LockingMode]));
+
+  if Info.Values[ConnProps_journal_mode] <> '' then
+    Stmt.ExecuteUpdate('PRAGMA journal_mode = '+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(Info.Values[ConnProps_journal_mode]));
+
+  if ( FClientCodePage <> '' ) and (FClientCodePage <> 'UTF-8') then
+    Stmt.ExecuteUpdate('PRAGMA encoding = '''+{$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(FClientCodePage)+'''');
+
+  Stmt.ExecuteUpdate('PRAGMA show_datatypes = ON');
+
+  if Info.Values[ConnProps_ForeignKeys] <> '' then
+    Stmt.ExecuteUpdate('PRAGMA foreign_keys = '+BoolStrIntsRaw[StrToBoolEx(Info.Values[ConnProps_ForeignKeys])] );
+  if not GetAutoCommit then
+    ExecTransactionStmt(traBegin);
 end;
 
 {**
@@ -369,7 +377,28 @@ begin
   if IsClosed then
     Open;
 
-  Result := TZSQLiteStatement.Create(GetPlainDriver, Self, Info, FHandle);
+  Result := TZSQLiteStatement.Create(Self, Info, FHandle);
+end;
+
+procedure TZSQLiteConnection.ExecTransactionStmt(
+  Action: TSQLite3TransactionAction);
+var
+  pzTail: PAnsiChar;
+begin
+  with FTransactionStmts[Action] do begin
+    if Stmt = nil then
+      CheckSQLiteError(FPlainDriver, FHandle,
+        FPlainDriver.sqlite3_Prepare_v2(FHandle, Pointer(SQL), nBytes, Stmt, pzTail{%H-}),
+          lcExecute, SQL, ConSettings);
+    try
+      CheckSQLiteError(FPlainDriver, FHandle, FPlainDriver.sqlite3_step(Stmt),
+        lcExecute, SQL, ConSettings);
+    finally
+      if Assigned(DriverManager) and DriverManager.HasLoggingListener then
+        DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, SQL);
+      FPlainDriver.sqlite3_reset(Stmt);
+    end;
+  end;
 end;
 
 {**
@@ -405,27 +434,16 @@ function TZSQLiteConnection.CreatePreparedStatement(const SQL: string;
 begin
   if IsClosed then
     Open;
-  Result := TZSQLiteCAPIPreparedStatement.Create(GetPlainDriver, Self, SQL, Info, FHandle);
+  Result := TZSQLiteCAPIPreparedStatement.Create(Self, SQL, Info, FHandle);
 end;
 
 {**
   Starts a transaction support.
 }
 procedure TZSQLiteConnection.StartTransactionSupport;
-var
-  ErrorCode: Integer;
-  ErrorMessage: PAnsiChar;
-  SQL: RawByteString;
 begin
-  if TransactIsolationLevel <> tiNone then
-  begin
-    ErrorMessage := '';
-    SQL := 'BEGIN TRANSACTION';
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-    if Assigned(DriverManager) and DriverManager.HasLoggingListener then
-      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, SQL);
-  end;
+  if not Closed and not AutoCommit then
+    ExecTransactionStmt(traBegin);
 end;
 
 function TZSQLiteConnection.GetUndefinedVarcharAsStringLength: Integer;
@@ -441,22 +459,13 @@ end;
   @see #setAutoCommit
 }
 procedure TZSQLiteConnection.Commit;
-var
-  ErrorCode: Integer;
-  ErrorMessage: PAnsiChar;
-  SQL: RawByteString;
 begin
-  if (TransactIsolationLevel <> tiNone) and not Closed then
-  begin
-    ErrorMessage := '';
-    SQL := 'COMMIT TRANSACTION';
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-    if Assigned(DriverManager) and DriverManager.HasLoggingListener then
-      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, SQL);
-
-    StartTransactionSupport;
-  end;
+  if not Closed then
+    if not GetAutoCommit then begin
+      ExecTransactionStmt(traCommit);
+      ExecTransactionStmt(traBegin);
+    end else
+      raise Exception.Create(SInvalidOpInAutoCommit);
 end;
 
 {**
@@ -467,22 +476,13 @@ end;
   @see #setAutoCommit
 }
 procedure TZSQLiteConnection.Rollback;
-var
-  ErrorCode: Integer;
-  ErrorMessage: PAnsiChar;
-  SQL: RawByteString;
 begin
-  if (TransactIsolationLevel <> tiNone) and not Closed then
-  begin
-    ErrorMessage := '';
-    SQL := 'ROLLBACK TRANSACTION';
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-    if Assigned(DriverManager) and DriverManager.HasLoggingListener then //thread save
-      DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, SQL);
-
-    StartTransactionSupport;
-  end;
+  if not Closed then
+    if not GetAutoCommit then begin
+      ExecTransactionStmt(traRollback);
+      ExecTransactionStmt(traBegin);
+    end else
+      raise Exception.Create(SInvalidOpInAutoCommit);
 end;
 
 {**
@@ -494,22 +494,26 @@ end;
   garbage collected. Certain fatal errors also result in a closed
   Connection.
 }
-procedure TZSQLiteConnection.Close;
+procedure TZSQLiteConnection.InternalClose;
 var
   LogMessage: RawByteString;
   ErrorCode: Integer;
+  TransactionAction: TSQLite3TransactionAction;
 begin
   if ( Closed ) or (not Assigned(PlainDriver)) then
     Exit;
-
   LogMessage := 'DISCONNECT FROM "'+ConSettings^.Database+'"';
-  ErrorCode := GetPlainDriver.Close(FHandle);
-  CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, nil,
-    lcOther, LogMessage, ConSettings);
+  for TransactionAction := low(TSQLite3TransactionAction) to high(TSQLite3TransactionAction) do
+    if FTransactionStmts[TransactionAction].Stmt <> nil then begin
+      FPlainDriver.sqlite3_finalize(FTransactionStmts[TransactionAction].Stmt);
+      FTransactionStmts[TransactionAction].Stmt := nil;
+    end;
+  ErrorCode := FPlainDriver.sqlite3_close(FHandle);
   FHandle := nil;
+  CheckSQLiteError(FPlainDriver, FHandle, ErrorCode,
+    lcOther, LogMessage, ConSettings);
   if Assigned(DriverManager) and DriverManager.HasLoggingListener then //thread save
     DriverManager.LogMessage(lcDisconnect, ConSettings^.Protocol, LogMessage);
-  inherited Close;
 end;
 
 {**
@@ -523,13 +527,24 @@ end;
 
 function TZSQLiteConnection.GetClientVersion: Integer;
 begin
-  Result := ConvertSQLiteVersionToSQLVersion(GetPlainDriver.LibVersion);
+  Result := ConvertSQLiteVersionToSQLVersion(FPlainDriver.sqlite3_libversion);
 end;
 
 {**
   Sets a new selected catalog name.
   @param Catalog a selected catalog name.
 }
+procedure TZSQLiteConnection.SetAutoCommit(Value: Boolean);
+begin
+  if Value <> GetAutoCommit then begin
+    if not GetAutoCommit and not Closed then
+      ExecTransactionStmt(traRollBack);
+    inherited SetAutoCommit(Value);
+    if not Value and not Closed then
+      ExecTransactionStmt(traBegin);
+  end;
+end;
+
 procedure TZSQLiteConnection.SetCatalog(const Catalog: string);
 begin
   FCatalog := Catalog;
@@ -541,24 +556,14 @@ end;
 }
 procedure TZSQLiteConnection.SetTransactionIsolation(
   Level: TZTransactIsolationLevel);
-var
-  ErrorCode: Integer;
-  ErrorMessage: PAnsiChar;
-  SQL: RawByteString;
 begin
-  if (TransactIsolationLevel <> tiNone) and not Closed then
-  begin
-    ErrorMessage := '';
-    SQL := 'ROLLBACK TRANSACTION';
-    ErrorCode := GetPlainDriver.Execute(FHandle, Pointer(SQL), nil, nil, ErrorMessage);
-    CheckSQLiteError(GetPlainDriver, FHandle, ErrorCode, ErrorMessage, lcExecute, SQL, ConSettings);
-    DriverManager.LogMessage(lcExecute, ConSettings^.Protocol, SQL);
+  if Level <> GetTransactionIsolation then begin
+    if not GetAutoCommit and not Closed then
+      ExecTransactionStmt(traRollBack);
+    inherited SetTransactionIsolation(Level);
+    if not GetAutoCommit and not Closed then
+      ExecTransactionStmt(traBegin);
   end;
-
-  inherited SetTransactionIsolation(Level);
-
-  if not Closed then
-    StartTransactionSupport;
 end;
 
 {**
@@ -570,15 +575,6 @@ begin
   Result := FHandle;
 end;
 
-{**
-  Gets a SQLite plain driver interface.
-  @return a SQLite plain driver interface.
-}
-function TZSQLiteConnection.GetPlainDriver: IZSQLitePlainDriver;
-begin
-  Result := PlainDriver as IZSQLitePlainDriver;
-end;
-
 function TZSQLiteConnection.GetServerProvider: TZServerProvider;
 begin
   Result := spSQLite;
@@ -586,7 +582,7 @@ end;
 
 function TZSQLiteConnection.GetHostVersion: Integer;
 begin
-  Result := ConvertSQLiteVersionToSQLVersion(GetPlainDriver.LibVersion);
+  Result := ConvertSQLiteVersionToSQLVersion(fPlainDriver.sqlite3_libversion);
 end;
 
 initialization

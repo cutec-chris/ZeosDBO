@@ -58,7 +58,7 @@ interface
 
 uses
   Classes, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, ZDbcIntfs, ZDbcPostgreSql, ZSqlTestCase,
-  ZCompatibility;
+  ZURL, ZCompatibility;
 
 type
 
@@ -75,11 +75,12 @@ type
     procedure TestCaseSensitive;
     procedure TestDefaultValues;
     procedure TestEnumValues;
+    procedure TestGUIDs;
   end;
 
 implementation
 
-uses SysUtils, ZTestConsts;
+uses SysUtils, ZTestConsts, ZSysUtils, ZVariant;
 
 { TZTestDbcPostgreSQLCase }
 
@@ -173,11 +174,15 @@ var
   TextStream: TStream;
   ImageStream: TMemoryStream;
   TempStream: TStream;
+  Url: TZURL;
 begin
-  Connection := DriverManager.GetConnection(GetConnectionUrl('oidasblob=true'));
+  Url := GetConnectionUrl('oidasblob=true');
+  Connection := DriverManager.GetConnection(Url.URL);
+  Url.Free;
   //Connection := DriverManager.GetConnectionWithLogin(
     //GetConnectionUrl + '?oidasblob=true', UserName, Password);
   Connection.SetTransactionIsolation(tiReadCommitted);
+  Connection.SetAutoCommit(False);
   Statement := Connection.CreateStatement;
   CheckNotNull(Statement);
   Statement.SetResultSetType(rtScrollInsensitive);
@@ -188,10 +193,10 @@ begin
 
   TextStream := TStringStream.Create('ABCDEFG');
   ImageStream := TMemoryStream.Create;
-  ImageStream.LoadFromFile('../../../database/images/zapotec.bmp');
+  ImageStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/zapotec.bmp');
 
   PreparedStatement := Connection.PrepareStatement(
-    'INSERT INTO blob_values (b_id,b_text,b_image) VALUES(?,?,?)');
+    'INSERT INTO blob_values (b_id,b_text,b_image) VALUES($1,$2,$3)');
   PreparedStatement.SetInt(b_id_index, TEST_ROW_ID);
   PreparedStatement.SetAsciiStream(b_text_index, TextStream);
   PreparedStatement.SetBinaryStream(b_image_index, ImageStream);
@@ -324,8 +329,7 @@ begin
   Statement.Close;
 
   // Update case
-  ResultSet := Statement.ExecuteQuery('UPDATE extension set ext_enum = ''House'' where ext_id = 1');
-  ResultSet.Close;
+  Statement.ExecuteQuery('UPDATE extension set ext_enum = ''House'' where ext_id = 1');
 
   ResultSet := Statement.ExecuteQuery('SELECT * FROM extension where ext_id = 1');
   CheckNotNull(ResultSet);
@@ -336,11 +340,9 @@ begin
   Statement.Close;
 
   // Insert case
-  ResultSet := Statement.ExecuteQuery('DELETE FROM extension where ext_id = 1');
-  ResultSet.Close;
+  Statement.ExecuteQuery('DELETE FROM extension where ext_id = 1');
 
-  ResultSet := Statement.ExecuteQuery('INSERT INTO extension VALUES(1,''Car'')');
-  ResultSet.Close;
+  Statement.ExecuteQuery('INSERT INTO extension VALUES(1,''Car'')');
 
   ResultSet := Statement.ExecuteQuery('SELECT * FROM extension where ext_id = 1');
   CheckNotNull(ResultSet);
@@ -349,6 +351,38 @@ begin
   CheckEquals('Car', ResultSet.GetString(ext_enum_index));
   ResultSet.Close;
   Statement.Close;
+end;
+
+procedure TZTestDbcPostgreSQLCase.TestGUIDs;
+const
+  ext_id_index = FirstDbcIndex+1;
+var
+  Statement: IZStatement;
+  ResultSet: IZResultSet;
+  S: String;
+begin
+  if Connection.GetHostVersion < 9 then
+    Exit;
+  Statement := Connection.CreateStatement;
+  CheckNotNull(Statement);
+
+  ResultSet := Statement.ExecuteQuery('SELECT id, guid FROM guid_test WHERE id = 1');
+  try
+    CheckNotNull(ResultSet);
+    ResultSet.First;
+
+    // Compare initial inserted value vs database read value from table
+    S := ZSysUtils.GUIDToStr(ResultSet.GetBytes(ext_id_index));
+    CheckEquals('{BAD51CFF-F21F-40E8-A9EA-838977A681BE}', s, 'UUID different');
+    S := ResultSet.GetString(ext_id_index);
+    //it's offical documented what PG returns:
+    //https://www.postgresql.org/docs/9.1/static/datatype-uuid.html
+    //so a native dbc user whould not agree if something else is returned
+    CheckEquals(LowerCase('BAD51CFF-F21F-40E8-A9EA-838977A681BE'), s, 'UUID different');
+  finally
+    ResultSet.Close;
+    Statement.Close;
+  end;
 end;
 
 initialization

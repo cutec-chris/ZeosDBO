@@ -76,7 +76,6 @@ type
     FRepeatCount: Cardinal;
     FLoadLobs: Boolean;
     FSkipFlag: Boolean;
-    FSkipPerformance: Boolean;
     FSkipPerformanceTransactionMode: Boolean;
     FPerformanceTable: String;
     FPerformancePrimaryKey: String;
@@ -95,10 +94,9 @@ type
     procedure LoadConfiguration; override;
     procedure SetUp; override;
     function GetImplementedAPI: string; virtual; abstract;
-    function SkipForReason(Reasons: ZSkipReasons): Boolean; override;
 
-    procedure Print(_Message: string); override;
-    procedure PrintLn(_Message: string); override;
+    procedure Print(const Msg: string); override;
+    procedure PrintLn(const Msg: string); override;
 
     { Informational methods. }
     function GetRecordCount: Integer;
@@ -266,7 +264,7 @@ implementation
 
 uses
   Math,
-  ZSysUtils, ZTestConfig, ZTestConsts, ZDatasetUtils, ZClasses, ZDbcUtils;
+  ZSysUtils, ZTestConfig, ZTestConsts, ZDatasetUtils, ZClasses;
 
 { TZPerformanceSQLTestCase }
 
@@ -314,7 +312,6 @@ begin
   { Reads other configuration parameters. }
   FRecordCount := StrToIntDef(ReadGroupProperty('records', ''), 1000);
   FRepeatCount := StrToIntDef(ReadGroupProperty('repeat', ''), 1);
-  FSkipPerformance := StrToBoolEx(ReadInheritProperty(SKIP_PERFORMANCE_KEY, TRUE_VALUE));
   FSkipPerformanceTransactionMode := StrToBoolEx(ReadInheritProperty(SKIP_PERFORMANCE_TRANS_KEY, FALSE_VALUE));
   FPerformanceTable := ReadInheritProperty(PERFORMANCE_TABLE_NAME_KEY, PERFORMANCE_TABLE_NAME);
   FPerformancePrimaryKey := ReadInheritProperty(PERFORMANCE_PRIMARYKEY_KEY, PERFORMANCE_PRIMARY_KEY);
@@ -328,29 +325,24 @@ begin
     DetermineFieldsProperties(ConnectionConfig);
 end;
 
-function TZPerformanceSQLTestCase.SkipForReason(Reasons: ZSkipReasons): Boolean;
-begin
-  Result := (FSkipPerformance and (srNoPerformance in Reasons));
-end;
-
 {**
   Print a string message.
   @param Message a message string.
 }
-procedure TZPerformanceSQLTestCase.Print(_Message: string);
+procedure TZPerformanceSQLTestCase.Print(const Msg: string);
 begin
 //  Status(_Message);
-  System.Write(_Message);
+  System.Write(Msg);
 end;
 
 {**
   Print a string message on a new line.
   @param Message a message string.
 }
-procedure TZPerformanceSQLTestCase.PrintLn(_Message: string);
+procedure TZPerformanceSQLTestCase.PrintLn(const Msg: string);
 begin
 //  Status(_Message)
-  System.Writeln(_Message);
+  System.Writeln(Msg);
 end;
 
 {**
@@ -402,7 +394,7 @@ begin
 
     Query1.Connection := Connection;
 
-    if StartsWith(Protocol, 'sqlite') then
+    if ProtocolType = protSQLite then
     begin
       Query1.SQL.Text := Format('SELECT COUNT(*), %s FROM %s', [PrimaryKey, TableName]);
       Query1.Open;
@@ -528,6 +520,8 @@ var
   StartTicks: Cardinal;
   StopTicks: Cardinal;
 begin
+  BlankCheck;
+
   { Filter tests by selected API and test name. }
   if FSelectedAPIs.IndexOf(GetImplementedAPI) < 0 then
     Exit;
@@ -751,7 +745,6 @@ end;
 }
 procedure TZPerformanceSQLTestCase.SetUpTestInsert;
 var
-  Bts: TBytes;
   Count: Integer;
 begin
   CleanupTable(FPerformanceTable);
@@ -759,11 +752,8 @@ begin
 
   Count := Min(MaxPerformanceLobSize, GetRecordCount);
   FAsciiStream := TStringStream.Create(RawByteString(RandomStr(Count)));
-  FUnicodeStream := WideStringStream(ZWideString(RandomStr(Count)));
-  FBinaryStream := TMemoryStream.Create;
-  Bts := RandomBts(Count);
-  TMemoryStream(FBinaryStream).Write(Bts, Count);
-  FBinaryStream.Position := 0;
+  FUnicodeStream := StreamFromData(ZWideString(RandomStr(Count)));
+  FBinaryStream := StreamFromData(RandomBts(Count));
 end;
 
 {**

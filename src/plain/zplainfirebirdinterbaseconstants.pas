@@ -78,6 +78,12 @@ const
   DSQL_DROP                     = 2;
   DSQL_UNPREPARE                = 4;
 
+  ISC_STATUS_LENGTH             = 20;
+
+  METADATALEN_V1                = 32; // Max length of any DB object name [v.1 - IB < 7.0, FB]
+
+  ISC_TIME_SECONDS_PRECISION       = 10000;
+  ISC_TIME_SECONDS_PRECISION_SCALE = (-4);
 
   SQLDA_VERSION1                = 1;
   SQLDA_VERSION2                = 2;
@@ -1752,7 +1758,8 @@ const
   isc_tpb_commit_time            = 13;
   isc_tpb_ignore_limbo           = 14;
   isc_tpb_read_committed         = 15;
-  isc_tpb_autocommit             = 16; //EH: Please do not use this JDBC option!
+  //http://firebird-devel.narkive.com/TPNAp4sB/semantics-of-isc-tpb-autocommit
+  isc_tpb_autocommit             = 16; //EH: Please do not use this borland option!
                                        //It kills the performance. Let Zeos do the Job by settting AutoCommit = True
                                        //see ZDbcInterbase.pas e.g. StartTransaction
   isc_tpb_rec_version            = 17;
@@ -1919,23 +1926,24 @@ const
   isc_info_db_file_size          = 112;
 
 type
-  ULong                = Cardinal;
-  UChar                = AnsiChar;
-  Short                = SmallInt;
 
+  ISC_SCHAR            = AnsiChar;
+  ISC_UCHAR            = AnsiChar;
+  ISC_SHORT            = SmallInt;
+  ISC_USHORT           = Word;
   ISC_LONG             = LongInt;
-  UISC_LONG            = ULong;
+  ISC_ULONG            = Cardinal;
   ISC_INT64            = Int64;
+  ISC_UINT64           = UInt64;
   ISC_STATUS           = NativeInt;
-  UISC_STATUS          = ULong;
   PISC_LONG            = ^ISC_LONG;
-  PUISC_LONG           = ^UISC_LONG;
+  PISC_ULONG           = ^ISC_ULONG;
   PISC_STATUS          = ^ISC_STATUS;
+  PISC_UCHAR           = ^ISC_UCHAR;
   PPISC_STATUS         = ^PISC_STATUS;
-  PUISC_STATUS         = ^UISC_STATUS;
+
+  Short                = SmallInt;
   PShort               = ^Short;
-  PPAnsiChar           = ^PAnsiChar;
-  UShort               = Word;
   PVoid                = Pointer;
 
   { C Date/Time Structure }
@@ -1955,8 +1963,8 @@ type
   PTM = ^TM;
 
   TISC_VARYING = record
-    strlen:       Short;
-    str:          array[0..0] of AnsiChar; //AVZ - was AnsiChar
+    strlen:       ISC_USHORT;
+    str:          array[0..0] of ISC_UCHAR; //AVZ - was AnsiChar
   end;
   PISC_VARYING = ^TISC_VARYING;
 
@@ -1970,16 +1978,17 @@ type
   PISC_STMT_HANDLE              = ^TISC_STMT_HANDLE;
   TISC_TR_HANDLE                = LongWord;
   PISC_TR_HANDLE                = ^TISC_TR_HANDLE;
-  TISC_CALLBACK                 = procedure;
+
+  TISC_CALLBACK = procedure (UserData: PVoid; Length: ISC_USHORT; Updated: PISC_UCHAR); cdecl;
 
   { Time & Date Support }
   ISC_DATE = LongInt;
   PISC_DATE = ^ISC_DATE;
-  ISC_TIME = ULong;
+  ISC_TIME = Cardinal;
   PISC_TIME = ^ISC_TIME;
 
   TISC_TIMESTAMP = record
-    timestamp_date: ISC_DATE; 
+    timestamp_date: ISC_DATE;
     timestamp_time: ISC_TIME;
   end;
   PISC_TIMESTAMP = ^TISC_TIMESTAMP;
@@ -1987,7 +1996,7 @@ type
   { Blob id structure }
   TGDS_QUAD = record
     gds_quad_high:  ISC_LONG;
-    gds_quad_low:   UISC_LONG;
+    gds_quad_low:   ISC_ULONG;
   end;
   PGDS_QUAD            = ^TGDS_QUAD;
 
@@ -2004,8 +2013,8 @@ type
     array_desc_dtype:   Byte;
     array_desc_scale:   ShortInt;
     array_desc_length:  Word;
-    array_desc_field_name: array[0..31] of AnsiChar;
-    array_desc_relation_name: array[0..31] of AnsiChar;
+    array_desc_field_name: array[0..METADATALEN_V1-1] of ISC_SCHAR;
+    array_desc_relation_name: array[0..METADATALEN_V1-1] of ISC_SCHAR;
     array_desc_dimensions: Short;
     array_desc_flags: Short;
     array_desc_bounds: array[0..15] of TISC_ARRAY_BOUND;
@@ -2016,8 +2025,8 @@ type
     blob_desc_subtype:          Short;
     blob_desc_charset:          Short;
     blob_desc_segment_size:     Short;
-    blob_desc_field_name:       array[0..31] of UChar;
-    blob_desc_relation_name:    array[0..31] of UChar;
+    blob_desc_field_name:       array[0..METADATALEN_V1-1] of ISC_UCHAR;
+    blob_desc_relation_name:    array[0..METADATALEN_V1-1] of ISC_UCHAR;
   end;
   PISC_BLOB_DESC = ^TISC_BLOB_DESC;
 
@@ -2033,23 +2042,23 @@ type
                                    { variable }
     sqlname_length:     Short;     { length of sqlname field }
     { name of field, name length + space for NULL }
-    sqlname:            array[0..31] of AnsiChar;
+    sqlname:            array[0..METADATALEN_V1-1] of ISC_SCHAR;
     relname_length:     Short;     { length of relation name }
     { field's relation name + space for NULL }
-    relname:            array[0..31] of AnsiChar;
+    relname:            array[0..METADATALEN_V1-1] of ISC_SCHAR;
     ownname_length:     Short;     { length of owner name }
     { relation's owner name + space for NULL }
-    ownname:            array[0..31] of AnsiChar;
+    ownname:            array[0..METADATALEN_V1-1] of ISC_SCHAR;
     aliasname_length:   Short;     { length of alias name }
     { relation's alias name + space for NULL }
-    aliasname:          array[0..31] of AnsiChar;
+    aliasname:          array[0..METADATALEN_V1-1] of ISC_SCHAR;
   end;
   PXSQLVAR = ^TXSQLVAR;
 
   TXSQLDA = record
     version:            Short;     { version of this XSQLDA }
     { XSQLDA name field }
-    sqldaid:            array[0..7] of AnsiChar;
+    sqldaid:            array[0..7] of ISC_SCHAR;
     sqldabc:            ISC_LONG;  { length in bytes of SQLDA }
     sqln:               Short;     { number of fields allocated }
     sqld:               Short;     { actual number of fields }
@@ -2083,334 +2092,11 @@ type
 
   { Interbase status array }
   PARRAY_ISC_STATUS = ^TARRAY_ISC_STATUS;
-  TARRAY_ISC_STATUS = array[0..20] of ISC_STATUS;
-
-{ ************** Plain API Function types definition ************* }
-
-  { General database routines }
-
-  Tisc_attach_database = function(status_vector: PISC_STATUS;
-    db_name_length: Short; db_name: PAnsiChar; db_handle: PISC_DB_HANDLE;
-    parm_buffer_length: Short; parm_buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_detach_database = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_drop_database = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_database_info = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; item_list_buffer_length: Short;
-    item_list_buffer: PByte; result_buffer_length: Short;
-    result_buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Array processing routines }
-  Tisc_array_gen_sdl = function(status_vector: PISC_STATUS;
-    isc_array_desc: PISC_ARRAY_DESC; isc_arg3: PShort;
-    isc_arg4: PAnsiChar; isc_arg5: PShort): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_array_get_slice = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; trans_handle: PISC_TR_HANDLE;
-    array_id: PISC_QUAD; descriptor: PISC_ARRAY_DESC;
-    dest_array: PVoid; slice_length: ISC_LONG): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_array_lookup_bounds = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; trans_handle: PISC_TR_HANDLE;
-    table_name, column_name: PAnsiChar;
-    descriptor: PISC_ARRAY_DESC): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_array_lookup_desc = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; trans_handle: PISC_TR_HANDLE;
-    table_name, column_name: PAnsiChar;
-    descriptor: PISC_ARRAY_DESC): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_array_set_desc = function(status_vector: PISC_STATUS;
-    table_name: PAnsiChar; column_name: PAnsiChar;
-    sql_dtype, sql_length, sql_dimensions: PShort;
-    descriptor: PISC_ARRAY_DESC): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_array_put_slice = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; trans_handle: PISC_TR_HANDLE;
-    array_id: PISC_QUAD; descriptor: PISC_ARRAY_DESC;
-    source_array: PVoid; slice_length: PISC_LONG): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_free = function(isc_arg1: PAnsiChar): ISC_LONG;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_sqlcode = function(status_vector: PISC_STATUS): ISC_LONG;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_sql_interprete = procedure(sqlcode: Short; buffer: PAnsiChar;
-    buffer_length: Short); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_interprete = function(buffer: PAnsiChar; status_vector: PPISC_STATUS):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tfb_interpret = function(buffer: PAnsiChar;  bufsize: integer; status_vector: PPISC_STATUS):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Transaction support routines }
-
-  Tisc_start_transaction = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE; db_handle_count: Short;
-    db_handle: PISC_DB_HANDLE; tpb_length: Word; tpb_address: PAnsiChar):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_start_multiple = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE; db_handle_count: Short;
-    teb_vector_address: PISC_TEB): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_rollback_transaction = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_rollback_retaining = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_commit_retaining = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_commit_transaction = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_transaction_info = function(status_vector: PISC_STATUS;
-    tr_handle: PISC_TR_HANDLE; item_list_buffer_length: Short;
-    item_list_buffer: PAnsiChar; result_buffer_length: Short;
-    result_buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Dynamic SQL routines }
-
-  Tisc_dsql_allocate_statement = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; stmt_handle: PISC_STMT_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_alloc_statement2 = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; stmt_handle: PISC_STMT_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_describe = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; dialect: Word; xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_describe_bind = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; dialect: Word; xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_execute = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE; stmt_handle: PISC_STMT_HANDLE; dialect: Word;
-    xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_execute2 = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE; stmt_handle: PISC_STMT_HANDLE; dialect: Word;
-    in_xsqlda, out_xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_execute_immediate = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; tran_handle: PISC_TR_HANDLE; length: Word;
-    statement: PAnsiChar; dialect: Word; xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_fetch = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; dialect: Word; xsqlda: PXSQLDA): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_free_statement = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; options: Word): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_prepare = function(status_vector: PISC_STATUS;
-    tran_handle: PISC_TR_HANDLE; stmt_handle: PISC_STMT_HANDLE;
-    length: Word; statement: PAnsiChar; dialect: Word; xsqlda: PXSQLDA):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_set_cursor_name = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; cursor_name: PAnsiChar; _type: Word): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_dsql_sql_info = function(status_vector: PISC_STATUS;
-    stmt_handle: PISC_STMT_HANDLE; item_length: Short; items: PAnsiChar;
-    buffer_length: Short; buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Blob processing routines }
-
-  Tisc_open_blob2 = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; tran_handle: PISC_TR_HANDLE;
-    blob_handle: PISC_BLOB_HANDLE; blob_id: PISC_QUAD; bpb_length: Short;
-    bpb_buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_create_blob2 = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; tran_handle: PISC_TR_HANDLE;
-    blob_handle: PISC_BLOB_HANDLE; blob_id: PISC_QUAD; bpb_length: Short;
-    bpb_address: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_blob_info = function(status_vector: PISC_STATUS;
-    blob_handle: PISC_BLOB_HANDLE; item_list_buffer_length: Short;
-    item_list_buffer: PAnsiChar; result_buffer_length: Short; result_buffer: PAnsiChar):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_close_blob = function(status_vector: PISC_STATUS;
-    blob_handle: PISC_BLOB_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_cancel_blob = function(status_vector: PISC_STATUS;
-    blob_handle: PISC_BLOB_HANDLE): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_get_segment = function(status_vector: PISC_STATUS;
-    blob_handle: PISC_BLOB_HANDLE; actual_seg_length: PWord;
-    seg_buffer_length: Word; seg_buffer: PAnsiChar): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_put_segment = function(status_vector: PISC_STATUS;
-    blob_handle: PISC_BLOB_HANDLE; seg_buffer_len: Word; seg_buffer: PAnsiChar):
-    ISC_STATUS; {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Event processing routines }
-
-  Tisc_event_block = function(event_buffer: PPAnsiChar; result_buffer: PPAnsiChar;
-    id_count: Word; event_list: array of PAnsiChar): ISC_LONG;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_event_counts = procedure(status_vector: PISC_STATUS;
-    buffer_length: Short; event_buffer: PAnsiChar; result_buffer: PAnsiChar);
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_cancel_events = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; event_id: PISC_LONG): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_que_events = function(status_vector: PISC_STATUS;
-    db_handle: PISC_DB_HANDLE; event_id: PISC_LONG; length: Short;
-    event_buffer: PAnsiChar; event_function: TISC_CALLBACK;
-    event_function_arg: PVoid): ISC_STATUS;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Types convertion routines }
-
-  Tisc_decode_date = procedure(ib_date: PISC_QUAD; tm_date: PCTimeStructure);
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_encode_date = procedure(tm_date: PCTimeStructure; ib_date: PISC_QUAD);
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  { Interbase Version 6 routines }
-  Tisc_decode_sql_date = procedure(ib_date: PISC_DATE;
-    tm_date: PCTimeStructure); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_decode_sql_time = procedure(ib_time: PISC_TIME;
-    tm_date: PCTimeStructure); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_decode_timestamp = procedure(ib_timestamp: PISC_TIMESTAMP;
-    tm_date: PCTimeStructure); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_encode_sql_date = procedure(tm_date: PCTimeStructure;
-    ib_date: PISC_DATE); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_encode_sql_time = procedure(tm_date: PCTimeStructure;
-    ib_time: PISC_TIME); {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_encode_timestamp = procedure(tm_date: PCTimeStructure;
-    ib_timestamp: PISC_TIMESTAMP);
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-  Tisc_vax_integer = function(buffer: PAnsiChar; length: Short): ISC_LONG;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-  Tisc_portable_integer = function(ptr: pbyte; length: Smallint): Int64;
-    {$IFDEF MSWINDOWS} stdcall {$ELSE} cdecl {$ENDIF};
-
-{ ************** Collection of Plain API Function types definition ************* }
-TZFirebird_API = record
-  { General database routines }
-  isc_attach_database:  Tisc_attach_database;
-  isc_detach_database:  Tisc_detach_database;
-  isc_drop_database:    Tisc_drop_database;
-  isc_database_info:    Tisc_database_info;
-  isc_free:             Tisc_free;
-  isc_sqlcode:          Tisc_sqlcode;
-  isc_sql_interprete:   Tisc_sql_interprete;
-  isc_interprete:       Tisc_interprete;
-  fb_interpret:         Tfb_interpret;
-
-  { Transaction support routines }
-  isc_start_transaction: Tisc_start_transaction;
-  isc_start_multiple:   Tisc_start_multiple;
-  isc_rollback_transaction: Tisc_rollback_transaction;
-  isc_rollback_retaining: Tisc_rollback_retaining;
-  isc_commit_transaction: Tisc_commit_transaction;
-  isc_commit_retaining: Tisc_commit_retaining;
-  isc_transaction_info: Tisc_transaction_info;
-
-  { Dynamic SQL routines }
-  isc_dsql_allocate_statement: Tisc_dsql_allocate_statement;
-  isc_dsql_alloc_statement2: Tisc_dsql_alloc_statement2;
-  isc_dsql_describe:    Tisc_dsql_describe;
-  isc_dsql_describe_bind: Tisc_dsql_describe_bind;
-  isc_dsql_execute:     Tisc_dsql_execute;
-  isc_dsql_execute2:    Tisc_dsql_execute2;
-  isc_dsql_execute_immediate: Tisc_dsql_execute_immediate;
-  isc_dsql_fetch:       Tisc_dsql_fetch;
-  isc_dsql_free_statement: Tisc_dsql_free_statement;
-  isc_dsql_prepare:     Tisc_dsql_prepare;
-  isc_dsql_set_cursor_name: Tisc_dsql_set_cursor_name;
-  isc_dsql_sql_info:    Tisc_dsql_sql_info;
-
-  { Array processing routines }
-  isc_array_gen_sdl:    Tisc_array_gen_sdl;
-  isc_array_get_slice:  Tisc_array_get_slice;
-  isc_array_lookup_bounds: Tisc_array_lookup_bounds;
-  isc_array_lookup_desc: Tisc_array_lookup_desc;
-  isc_array_set_desc:   Tisc_array_set_desc;
-  isc_array_put_slice:  Tisc_array_put_slice;
-
-  { Blob processing routines }
-  isc_open_blob2:       Tisc_open_blob2;
-  isc_create_blob2:     Tisc_create_blob2;
-  isc_blob_info:        Tisc_blob_info;
-  isc_close_blob:       Tisc_close_blob;
-  isc_cancel_blob:      Tisc_cancel_blob;
-  isc_get_segment:      Tisc_get_segment;
-  isc_put_segment:      Tisc_put_segment;
-
-  { Event processing routines }
-  isc_que_events:       Tisc_que_events;
-  isc_event_counts:     Tisc_event_counts;
-  isc_event_block:      Tisc_event_block;
-  isc_cancel_events:    Tisc_cancel_events;
-
-  { Types convertion routines }
-  isc_encode_date:      Tisc_encode_date;
-  isc_decode_date:      Tisc_decode_date;
-  isc_vax_integer:      Tisc_vax_integer;
-  isc_portable_integer: Tisc_portable_integer;
-
-  isc_encode_sql_date:  Tisc_encode_sql_date;
-  isc_decode_sql_date:  Tisc_decode_sql_date;
-
-  isc_encode_sql_time:  Tisc_encode_sql_time;
-  isc_decode_sql_time:  Tisc_decode_sql_time;
-
-  isc_encode_timestamp: Tisc_encode_timestamp;
-  isc_decode_timestamp: Tisc_decode_timestamp;
-end;
+  TARRAY_ISC_STATUS = array[0..ISC_STATUS_LENGTH-1] of ISC_STATUS;
+
+  { Interbase event counts array }
+  PARRAY_ISC_EVENTCOUNTS = ^TARRAY_ISC_EVENTCOUNTS;
+  TARRAY_ISC_EVENTCOUNTS = array[0..ISC_STATUS_LENGTH-1] of ISC_ULONG;
 
 implementation
 

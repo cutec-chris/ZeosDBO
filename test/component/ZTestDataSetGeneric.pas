@@ -56,8 +56,8 @@ interface
 
 uses
   Classes, DB, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, SysUtils,
-  ZDataset, ZConnection, ZDbcIntfs, ZSqlTestCase, ZCompatibility,
-  ZAbstractRODataset;
+  ZDataset, ZConnection, ZDbcIntfs, ZSqlTestCase, ZCompatibility, ZVariant,
+  ZAbstractRODataset, ZMessages, ZStoredProcedure;
 
 type
   {** Implements a test case for . }
@@ -66,8 +66,12 @@ type
 
   TZGenericTestDataSet = class(TZAbstractCompSQLTestCase)
   private
+    FQuery: TZQuery;
+    FFieldList: string;
+    procedure RunDefineFields;
+    procedure RunDefineSortedFields;
     procedure TestReadCachedLobs(const BinLob: String; aOptions: TZDataSetOptions;
-      BinStreamE: TMemoryStream; Query: TZReadOnlyQuery);
+      BinStreamE: TMemoryStream; Query: TZAbstractRODataset);
   protected
     procedure TestQueryGeneric(Query: TDataset);
     procedure TestFilterGeneric(Query: TDataset);
@@ -98,12 +102,55 @@ type
     procedure TestLobModes;
     procedure TestSpaced_Names;
     procedure Test_doCachedLobs;
+    procedure TestDefineFields;
+    procedure TestDefineSortedFields;
+    procedure TestEmptyMemoAfterFullMemo;
+    procedure TestInsertReturning;
+    procedure TestNullUnionNull;
   end;
 
   TZGenericTestDataSetMBCs = class(TZAbstractCompSQLTestCaseMBCs)
   published
     procedure TestVeryLargeBlobs;
   end;
+  {$IF not declared(TTestMethod)}
+    TTestMethod = procedure of object;
+  {$IFEND}
+
+  {$IFDEF ENABLE_INTERBASE}
+  TZInterbaseTestGUIDS = class(TZAbstractCompSQLTestCase)
+  private
+    CurrentTest: string;
+    Query: TZQuery;
+    SP: TZStoredProc;
+    procedure SetDefaults;
+    procedure DoTest(const TestDescr: string; TestMethod: TTestMethod);
+    procedure CheckEquals(expected, actual: TFieldType; msg: string = ''); overload;
+    procedure CheckNotEquals(expected, actual: TFieldType; msg: string = ''); overload;
+  private // Internal test methods
+    procedure Test_QT_Type_Type;
+    procedure Test_QT_Type_Dom;
+    procedure Test_QT_Type_FName;
+    procedure Test_QT_GetVal;
+    procedure Test_QT_SetVal;
+    procedure Test_QT_ParamSetVal;
+    procedure Test_QSP_Type_Type;
+    procedure Test_QSP_Type_Dom;
+    procedure Test_QSP_Type_FName;
+    procedure Test_SP_ParamType_Dom;
+    procedure Test_SP_ParamType_Type;
+    procedure Test_SP_ParamType_Name;
+    procedure Test_SP_Type_Dom;
+    procedure Test_SP_Type_Type;
+    procedure Test_SP_ParamGUIDSetVal;
+    procedure Test_SP_ParamBytesSetVal;
+    procedure Test_SP_Type_Name;
+  protected
+    function GetSupportedProtocols: string; override;
+  published
+    procedure Test;
+  end;
+  {$ENDIF}
 
 implementation
 
@@ -112,8 +159,9 @@ uses
   Variants,
 {$ENDIF}
   {$IFDEF UNICODE}ZEncoding,{$ENDIF}
-  DateUtils, ZSysUtils, ZTestConsts, ZTestCase,
-  ZDatasetUtils, strutils{$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
+  DateUtils, ZSysUtils, ZTestConsts, ZTestCase, ZDbcProperties,
+  ZDatasetUtils, strutils{$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF},
+  TypInfo;
 
 { TZGenericTestDataSet }
 
@@ -165,8 +213,8 @@ begin
       try
         Connection.GetCatalogNames(MetadataList);
         Fail('On closed connection call should throw exception');
-      except
-        // Ignore.
+      except on E: Exception do
+        CheckNotTestFailure(E);
       end;
 
       Connection.Connect;
@@ -304,12 +352,12 @@ begin
       Params[4].AsDateTime := EncodeTime(17, 30, 0, 0);
 
       BinStream := TMemoryStream.Create;
-      BinStream.LoadFromFile('../../../database/images/dogs.jpg');
+      BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
       BinStream.Size := 1024;
       Params[5].LoadFromStream(BinStream, ftBlob);
 
       StrStream := TMemoryStream.Create;
-      StrStream.LoadFromFile('../../../database/text/lgpl.txt');
+      StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
       StrStream.Size := 1024;
 //      Params[6].LoadFromStream(StrStream, {$IFDEF UNICODE}ftWideMemo{$ELSE}ftMemo{$ENDIF});
       Params[6].LoadFromStream(StrStream, ftMemo);
@@ -381,6 +429,10 @@ begin
       CheckEquals(1, RowsAffected);
     end;
   finally
+    Query.SQL.Text := 'DELETE FROM people where p_id = ' + IntToStr(TEST_ROW_ID);
+    Query.ExecSQL;
+    Query.SQL.Text := 'DELETE FROM equipment where eq_id = ' + IntToStr(TEST_ROW_ID);
+    Query.ExecSQL;
     Query.Free;
   end;
 end;
@@ -400,6 +452,13 @@ begin
       SQL.Text := 'DELETE FROM equipment where eq_id = ' + IntToStr(TEST_ROW_ID);
       ExecSQL;
     end;
+    //see http://zeoslib.sourceforge.net/viewtopic.php?f=40&t=49966
+    Query.SQL.Text := 'select IsNull(B.X||B.y, '+QuotedStr('')+') as X_Y_Z from "My_Table" as B '+
+    'where 1=1 and :user_ID = B.x and ((B.nazwa iLike :nazwaFiltr) or (B.skrot iLike :nazwaFiltr))';
+    CheckEquals(2, Query.Params.Count);
+    CheckEquals('user_ID', Query.Params[0].Name);
+    CheckEquals('nazwaFiltr', Query.Params[1].Name);
+    Query.SQL.Text := '';
 
     {
       The test for equipment table
@@ -546,14 +605,19 @@ end;
 {**
   Check functionality of TZReadOnlyQuery
 }
+
+type
+  TZAbstractRODatasetHack = class(TZAbstractRODataset)
+  end;
+
 procedure TZGenericTestDataSet.TestReadCachedLobs(const BinLob: String;
-  aOptions: TZDataSetOptions; BinStreamE: TMemoryStream; Query: TZReadOnlyQuery);
+  aOptions: TZDataSetOptions; BinStreamE: TMemoryStream; Query: TZAbstractRODataset);
 var
   BinStreamA: TMemoryStream;
 begin
   BinStreamA := nil;
   try
-    with Query do
+    with TZAbstractRODatasetHack(Query) do
     begin
       Options := aOptions;
       SQL.Text := 'SELECT * FROM blob_values where b_id >= '+ IntToStr(TEST_ROW_ID-1);
@@ -567,6 +631,7 @@ begin
       BinStreamA.Position:=0;
       (FieldByName(BinLob) as TBlobField).SaveToStream(BinStreamA);
       CheckEquals(BinStreamE, BinStreamA, 'Binary Stream');
+      FreeAndNil(BinStreamA);
       First;
       Refresh;
       CheckEquals(2, RecordCount, 'RecordCount');
@@ -578,6 +643,7 @@ begin
       BinStreamA.Position:=0;
       (FieldByName(BinLob) as TBlobField).SaveToStream(BinStreamA);
       CheckEquals(BinStreamE, BinStreamA, 'Binary Stream');
+      FreeAndNil(BinStreamA);
       Close;
     end;
   finally
@@ -727,7 +793,7 @@ begin
 
       Sql_ := 'SELECT * FROM people where p_id = ' + IntToStr(TEST_ROW_ID);
       StrStream := TMemoryStream.Create();
-      StrStream.LoadFromFile('../../../database/text/lgpl.txt');
+      StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
       StrStream.Size := 1024;
 
       //Modification by EgonHugeist: Different behavior for the Same Field
@@ -745,7 +811,7 @@ begin
         StrStream.Position := 0;
       end;
       BinStream := TMemoryStream.Create();
-      BinStream.LoadFromFile('../../../database/images/dogs.jpg');
+      BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
       BinStream.Size := 1024;
       BinStream1 := TMemoryStream.Create;
       StrStream1 := TMemoryStream.Create;
@@ -864,6 +930,7 @@ end;
 procedure TZGenericTestDataSet.TestQueryGeneric(Query: TDataset);
 var
   SQL: string;
+  i: Integer;
 begin
   { select equipment table }
   SQL := 'DELETE FROM equipment where eq_id > 100';
@@ -983,7 +1050,7 @@ begin
     CheckEquals(10, FieldByName('c_width').AsInteger);
     CheckEquals(10, FieldByName('c_height').AsInteger);
     CheckEquals(986.47, FieldByName('c_cost').AsFloat, 0.001);
-    //CheckEquals('#14#17#Tþ¨ª2', FieldByName('c_attributes').AsString);
+    //CheckEquals('#14#17#T???2', FieldByName('c_attributes').AsString);
     Close;
   end;
 
@@ -1041,6 +1108,48 @@ begin
       Last;
       CheckEquals(True, Eof);
     end;
+    Close;
+  end;
+
+  { select equipment table }
+  // test traversing through dataset with FindNext
+  SQL := 'SELECT * FROM equipment';
+  if GetName = 'TestQuery' then
+    (Query as TZQuery).SQL.Text := SQL
+  else
+    (Query as TZReadOnlyQuery).SQL.Text := SQL;
+  with Query do
+  begin
+    Open;
+    i := 0;
+    repeat
+      Inc(i);
+      CheckEquals(i, RecNo);
+    until not Query.FindNext;
+    CheckEquals(i, RecordCount);
+    CheckEquals(4, RecordCount);
+    Close;
+  end;
+
+  { select equipment table }
+  // test traversing through dataset with Next
+  SQL := 'SELECT * FROM equipment';
+  if GetName = 'TestQuery' then
+    (Query as TZQuery).SQL.Text := SQL
+  else
+    (Query as TZReadOnlyQuery).SQL.Text := SQL;
+  with Query do
+  begin
+    Open;
+    i := 0;
+    while not EOF do
+    begin
+      Inc(i);
+      CheckEquals(i, RecNo);
+      Next;
+    end;
+    CheckEquals(i, RecordCount);
+    CheckEquals(4, RecordCount);
     Close;
   end;
 
@@ -1145,7 +1254,7 @@ var
 begin
   Query := CreateQuery;
   try
-  { TODO : Enable this test }//TestFilterGeneric(Query);
+    TestFilterGeneric(Query);
   finally
     Query.Free;
   end;
@@ -1168,72 +1277,99 @@ begin
   begin
     Open;
     Filtered := True;
-    CheckEquals(4, RecordCount);
-    CheckEquals(False, IsEmpty);
+    CheckEquals(4, RecordCount, 'RecordCount');
+    CheckEquals(False, IsEmpty, 'IsEmpty');
+
+    //(*
+    Filter := 'eq_date = ''' + DateToStr(Encodedate(2001, 10, 7)) + '''';
+    CheckEquals(1, RecordCount);
+    CheckEquals(2, FieldByName('eq_id').AsInteger, 'field eq_id');
+
+    Filter := 'eq_date > ''' + DateToStr(Encodedate(2000, 1, 1)) + '''';
+    CheckEquals(2, RecordCount);
+    First;
+    CheckEquals(2, FieldByName('eq_id').AsInteger, 'field eq_id');
+    Next;
+    CheckEquals(4, FieldByName('eq_id').AsInteger, 'field eq_id');
 
     Filter := 'eq_id = 3';
     CheckEquals(1, RecordCount);
-    FieldByName('eq_name').AsString := 'Computer';
+    CheckEquals('Computer', FieldByName('eq_name').AsString, 'Field eq_name');
 
     Filter := 'eq_name = ''Volvo''';
     CheckEquals(1, RecordCount);
-    FieldByName('eq_id').AsInteger := 1;
+    CheckEquals(1, FieldByName('eq_id').AsInteger, 'field eq_id');
 
     Filter := 'eq_cost > 1000';
     CheckEquals(2, RecordCount);
     First;
-    FieldByName('eq_id').AsInteger := 1;
+    CheckEquals(1, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 2;
+    CheckEquals(2, FieldByName('eq_id').AsInteger, 'field eq_id');
 
     Filter := 'eq_type <= 10';
     CheckEquals(3, RecordCount);
     First;
-    FieldByName('eq_id').AsInteger := 1;
+    CheckEquals(1, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 2;
+    CheckEquals(2, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 3;
+    CheckEquals(3, FieldByName('eq_id').AsInteger, 'field eq_id');
 
-    Filter := 'eq_type = ''C*''';
-    CheckEquals(1, RecordCount);
-    FieldByName('eq_id').AsInteger := 3;
+    Filter := 'eq_name like ''C*''';
+    CheckEquals(1, RecordCount); //oracle, ADO, SQLite fails
+    CheckEquals(3, FieldByName('eq_id').AsInteger, 'field eq_id');
 
-    Filter := 'eq_type = ''*o*''';
+    Filter := 'eq_name like ''*o*''';
     CheckEquals(4, RecordCount);
     {check what cursor save position}
-    FieldByName('eq_id').AsInteger := 4;
+    CheckEquals(3, FieldByName('eq_id').AsInteger, 'field eq_id');
     First;
-    FieldByName('eq_id').AsInteger := 1;
+    CheckEquals(1, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 2;
+    CheckEquals(2, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 3;
+    CheckEquals(3, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 4;
-
-    Filter := 'eq_type = ''' + DateToStr(Encodedate(2001, 7, 10)) + '''';
-    CheckEquals(1, RecordCount);
-    FieldByName('eq_id').AsInteger := 2;
-
-    Filter := 'eq_type > ''' + DateToStr(Encodedate(2000, 1, 1)) + '''';
-    CheckEquals(2, RecordCount);
-    First;
-    FieldByName('eq_id').AsInteger := 2;
-    Next;
-    FieldByName('eq_id').AsInteger := 4;
+    CheckEquals(4, FieldByName('eq_id').AsInteger, 'field eq_id');
 
 
-    Filter := 'eq_type <= ''' + DateToStr(Encodedate(2000, 7, 8)) + '''';
+    Filter := 'eq_date <= ''' + DateToStr(Encodedate(2000, 8, 7)) + '''';
     CheckEquals(3, RecordCount);
     First;
-    FieldByName('eq_id').AsInteger := 1;
+    CheckEquals(1, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 3;
+    CheckEquals(3, FieldByName('eq_id').AsInteger, 'field eq_id');
     Next;
-    FieldByName('eq_id').AsInteger := 4;
+    CheckEquals(4, FieldByName('eq_id').AsInteger, 'field eq_id');
+    Filter := '';
 
+    Filter := 'woff_date is null';  //SF.net ticket #229
+    CheckEquals(4, RecordCount);
+
+    Filter := 'woff_date is not null'; //SF.net ticket #229
+    CheckEquals(0, RecordCount);
+
+    Filter := '';
+//    *)
     Close;
+
+    //(*
+    //SF.net ticket #200 ->
+    CheckEquals(1, Connection.DbcConnection.CreateStatement.ExecuteUpdate('insert into equipment(eq_id, eq_name) values ('+
+      IntToStr(5)+','''+DateToStr(Encodedate(2000, 8, 7))+''')'), 'inserted row');
+    try
+      Open;
+      CheckEquals(5, RecordCount);
+
+      Filter := 'eq_name = '''+DateToStr(Encodedate(2000, 8, 7))+'''';
+      CheckEquals(1, RecordCount);
+      CheckEquals(5, FieldByName('eq_id').AsInteger, 'field eq_id');
+
+    finally
+      Connection.DbcConnection.CreateStatement.ExecuteUpdate('delete from equipment where eq_id = '+IntToStr(5));
+    end;
+    //*)
   end;
 end;
 
@@ -1274,7 +1410,7 @@ var
 begin
   Query := CreateReadOnlyQuery;
   try
-  { TODO : Enable this test }//!!  TestFilterGeneric(Query);
+    TestFilterGeneric(Query);
   finally
     Query.Free;
   end;
@@ -1369,15 +1505,15 @@ begin
     try
       Query.Open;
       Fail('Wrong open behaviour without SmartOpen.');
-    except
-      // Ignore.
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
 
     try
       Query.Active := True;
       Fail('Wrong open behaviour without SmartOpen.');
-    except
-      // Ignore.
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
 
     Query.Options := Query.Options + [doSmartOpen];
@@ -1443,8 +1579,8 @@ begin
     try
       Query.Prepare;
       Fail('Wrong prepare behaviour.');
-    except
-      // Ignore.
+    except on E: Exception do
+      CheckNotTestFailure(E);
     end;
     Check(Not Query.Prepared);
     Query.Active := False;
@@ -1584,6 +1720,7 @@ begin
       TempConnection.Properties.Text := Connection.Properties.Text;
       TempConnection.Properties.Add('oidasblob=true');
       TempConnection.TransactIsolationLevel := tiReadCommitted;
+      TempConnection.AutoCommit := False;    //https://www.postgresql.org/message-id/002701c49d7e%240f059240%24d604460a%40zaphod
       TempConnection.Connect;
       Query.Connection := TempConnection;
       ROQuery.Connection := TempConnection;
@@ -1610,16 +1747,16 @@ begin
       Params[1].DataType := ftBlob;
       Params[0].AsInteger := TEST_ROW_ID;
       BinStreamE := TMemoryStream.Create;
-      BinStreamE.LoadFromFile('../../../database/images/horse.jpg');
+      BinStreamE.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/horse.jpg');
       Params[1].LoadFromStream(BinStreamE, ftBlob);
       ExecSQL;
       CheckEquals(1, RowsAffected);
 
     end;
-    TestReadCachedLobs(BinLob, aOptions, BinStreamE, TZReadOnlyQuery(Query));
+    TestReadCachedLobs(BinLob, aOptions, BinStreamE, Query);
     TestReadCachedLobs(BinLob, aOptions, BinStreamE, ROQuery);
     Include(aOptions, doCachedLobs);
-    TestReadCachedLobs(BinLob, aOptions, BinStreamE, TZReadOnlyQuery(Query));
+    TestReadCachedLobs(BinLob, aOptions, BinStreamE, Query);
     TestReadCachedLobs(BinLob, aOptions, BinStreamE, ROQuery);
   finally
     if assigned(BinStreamE) then
@@ -1627,6 +1764,8 @@ begin
     Query.SQL.Text := 'DELETE FROM blob_values where b_id >= '+ IntToStr(TEST_ROW_ID-1);
     try
       Query.ExecSQL;
+      if Assigned(TempConnection) then
+        TempConnection.Commit;
     finally
       Query.Free;
       try
@@ -1696,6 +1835,21 @@ begin
       CheckEquals(3.14159265358979323846, FieldByName('n_dprecission').AsFloat,0.0000000000001);
       Close;
     end;
+  finally
+    Query.Free;
+  end;
+end;
+
+procedure TZGenericTestDataSet.TestNullUnionNull;
+var
+  Query: TZQuery;
+begin
+  Query := CreateQuery;
+  try
+    Query.SQL.Text := 'SELECT null as col1 FROM people union SELECT null as col1 FROM people';
+    Query.Open; //just take care we can open a cursor
+    BlankCheck;
+    Query.Close;
   finally
     Query.Free;
   end;
@@ -1805,6 +1959,7 @@ begin
       TempConnection.Properties.Text := Connection.Properties.Text;
       TempConnection.Properties.Add('oidasblob=true');
       TempConnection.TransactIsolationLevel := tiReadCommitted;
+      TempConnection.AutoCommit := False;    //https://www.postgresql.org/message-id/002701c49d7e%240f059240%24d604460a%40zaphod
       TempConnection.Connect;
       Query.Connection := TempConnection;
       Connection.TransactIsolationLevel:=tiReadCommitted;
@@ -1829,7 +1984,7 @@ begin
         BinLob := 'b_image';
       end;
       BinStreamE := TMemoryStream.Create;
-      BinStreamE.LoadFromFile('../../../database/images/horse.jpg');
+      BinStreamE.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/horse.jpg');
       BinStreamE.Position := 0;
 
       TextStreamE := TMemoryStream.Create;
@@ -1849,7 +2004,7 @@ begin
       TextStreamA.Write(teststring[1],length(teststring));
       TextStreamA.Free;
       BinStreamA := Query.CreateBlobStream(Query.FieldByName(BinLob), bmWrite);
-      TMemoryStream(BinStreamA).LoadFromFile('../../../database/images/horse.jpg');
+      TMemoryStream(BinStreamA).LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/horse.jpg');
       BinStreamA.Free;
       Post;
 
@@ -1937,6 +2092,8 @@ begin
     Query.SQL.Text := 'DELETE FROM blob_values where b_id = '+ IntToStr(TEST_ROW_ID-1);
     try
       Query.ExecSQL;
+      if Assigned(TempConnection) then
+        TempConnection.Commit;
     finally
       Query.Free;
       if Assigned(TempConnection) then
@@ -1948,16 +2105,17 @@ end;
 procedure TZGenericTestDataSet.TestSpaced_Names;
 var
   Query: TZQuery;
+
   function GetNonQuotedAlias(const Value: String): String;
   begin
-    if StartsWith(Protocol, 'postgresql') then
-      Result := LowerCase(Value)
-    else
-      if StartsWith(Protocol, 'oracle') or StartsWith(Protocol, 'firebird') or
-         StartsWith(Protocol, 'interbase') then
-        Result := UpperCase(Value)
+    case ProtocolType of
+      protPostgre:
+        Result := LowerCase(Value);
+      protOracle, protFirebird, protInterbase:
+        Result := UpperCase(Value);
       else
         Result := Value;
+    end;
   end;
 begin
   Query := CreateQuery;
@@ -2043,10 +2201,189 @@ begin
   end;
 end;
 
+procedure TZGenericTestDataSet.RunDefineFields;
+var
+  Bool: Boolean;
+begin
+  DefineFields(FQuery, FFieldList, Bool, CommonTokenizer);
+end;
+
+procedure TZGenericTestDataSet.RunDefineSortedFields;
+var
+  Bool: Boolean;
+  CompareKinds: TComparisonKindArray;
+  Fields: TObjectDynArray;
+begin
+  DefineSortedFields(FQuery, FFieldList, Fields, CompareKinds, Bool);
+end;
+
+procedure TZGenericTestDataSet.TestDefineFields;
+
+  procedure CheckFieldList(const FieldList: string; const Expect: array of TField);
+  var
+    Bool: Boolean;
+    Fields: TObjectDynArray;
+    i: Integer;
+  begin
+    Fields := DefineFields(FQuery, FieldList, Bool, CommonTokenizer);
+    CheckEquals(Length(Expect), Length(Fields), 'FieldList "' + FieldList + '" - item count');
+    for i := Low(Fields) to High(Fields) do
+      CheckSame(Expect[i], Fields[i], 'FieldList "' + FieldList + '" - item #' + IntToStr(i));
+  end;
+
+  procedure CheckExceptionRaised(const FieldList: string; Expect: ExceptClass; const ExpectMsg: string = '');
+  begin
+    FFieldList := FieldList;
+    CheckException(RunDefineFields, Expect, ExpectMsg, 'FieldList "' + FieldList + '"');
+  end;
+
+var
+  F1, F2: TStringField;
+begin
+  FQuery := TZQuery.Create(nil);
+  try
+    F1 := TStringField.Create(FQuery);
+    F1.FieldName := 'Field1';
+    FQuery.Fields.Add(F1);
+    F2 := TStringField.Create(FQuery);
+    F2.FieldName := 'Field2';
+    FQuery.Fields.Add(F2);
+
+    CheckFieldList('', []);
+    CheckFieldList('Field1,Field2', [F1, F2]);
+    CheckFieldList('Field1;Field2', [F1, F2]);
+    CheckFieldList('Field1 Field2', [F1, F2]); // this works currently but not recommended
+    CheckFieldList('"Field1", "Field2"', [F1, F2]);
+    CheckFieldList('1,0', [F2, F1]);
+
+    CheckExceptionRaised('-1,0', EZDatabaseError, Format(SIncorrectSymbol, ['-']));
+    CheckExceptionRaised('Field1/Field2', EZDatabaseError, Format(SIncorrectSymbol, ['/']));
+    CheckExceptionRaised('1,12345', EZDatabaseError, Format(SFieldNotFound2, [12345]));
+    CheckExceptionRaised('foo,bar', EDatabaseError);
+    CheckExceptionRaised('Field1,"not exists",Field2', EDatabaseError);
+  finally
+    FQuery.Free;
+  end;
+end;
+
+procedure TZGenericTestDataSet.TestDefineSortedFields;
+
+  procedure CheckFieldList(const FieldList: string; const ExpectFields: array of TField; const ExpectCompareKinds: array of TComparisonKind);
+  var
+    Bool: Boolean;
+    Fields: TObjectDynArray;
+    CompareKinds: TComparisonKindArray;
+    i: Integer;
+  begin
+    DefineSortedFields(FQuery, FieldList, Fields, CompareKinds, Bool);
+    CheckEquals(Length(ExpectFields), Length(Fields), 'FieldList "' + FieldList + '" - item count');
+    CheckEquals(Length(ExpectCompareKinds), Length(CompareKinds), 'FieldList "' + FieldList + '" - item count');
+    for i := Low(Fields) to High(Fields) do
+    begin
+      CheckSame(ExpectFields[i], Fields[i], 'FieldList "' + FieldList + '" - item #' + IntToStr(i));
+      CheckEquals(Integer(ExpectCompareKinds[i]), Integer(CompareKinds[i]), 'FieldList "' + FieldList + '" - item #' + IntToStr(i));
+    end;
+  end;
+
+  procedure CheckExceptionRaised(const FieldList: string; Expect: ExceptClass; const ExpectMsg: string = '');
+  begin
+    FFieldList := FieldList;
+    CheckException(RunDefineSortedFields, Expect, ExpectMsg, 'FieldList "' + FieldList + '"');
+  end;
+
+var
+  F1, F2, F3: TStringField;
+begin
+  FQuery := TZQuery.Create(nil);
+  try
+    F1 := TStringField.Create(FQuery);
+    F1.FieldName := 'Field1';
+    FQuery.Fields.Add(F1);
+    F2 := TStringField.Create(FQuery);
+    F2.FieldName := 'Field2';
+    FQuery.Fields.Add(F2);
+    F3 := TStringField.Create(FQuery);
+    F3.FieldName := 'Desc';
+    FQuery.Fields.Add(F3);
+
+    CheckFieldList('', [], []);
+    CheckFieldList('Field1,Field2', [F1, F2], [ckAscending, ckAscending]);
+    CheckFieldList('Field1;Field2', [F1, F2], [ckAscending, ckAscending]);
+    CheckFieldList('"Field1", "Field2"', [F1, F2], [ckAscending, ckAscending]);
+    CheckFieldList('1,0', [F2, F1], [ckAscending, ckAscending]);
+
+    CheckFieldList('Field1 desc, Field2 desc', [F1, F2], [ckDescending, ckDescending]);
+    CheckFieldList('Field1 desc, 1 asc', [F1, F2], [ckDescending, ckAscending]);
+    CheckFieldList('Field1 desc, Field2 desc, Desc', [F1, F2, F3], [ckDescending, ckDescending, ckAscending]);
+    CheckFieldList('Field1 desc, Field2 desc, Desc asc', [F1, F2, F3], [ckDescending, ckDescending, ckAscending]);
+    CheckFieldList('Field1 desc  Field2 desc Desc', [F1, F2, F3], [ckDescending, ckDescending, ckAscending]);
+
+    CheckExceptionRaised('-1,0', EZDatabaseError, Format(SIncorrectSymbol, ['-']));
+    CheckExceptionRaised('Field1/Field2', EZDatabaseError, Format(SIncorrectSymbol, ['/']));
+    CheckExceptionRaised('1,12345', EZDatabaseError, Format(SFieldNotFound2, [12345]));
+    CheckExceptionRaised('foo,bar', EDatabaseError);
+    CheckExceptionRaised('Field1,"not exists",Field2', EDatabaseError);
+
+    CheckExceptionRaised('Field1 Field2', EZDatabaseError, Format(SIncorrectSymbol, ['Field2']));
+    CheckExceptionRaised('Field1 desc,Field2 foo', EZDatabaseError, Format(SIncorrectSymbol, ['foo']));
+  finally
+    FQuery.Free;
+  end;
+end;
+
+procedure TZGenericTestDataSet.TestInsertReturning;
+const
+  D_ID  = 0;
+  D_FLD = 1;
+const
+  SQLDel = 'DELETE FROM insert_returning';
+  SQLSel = 'SELECT * FROM insert_returning';
+var
+  Query: TZQuery;
+begin
+  case ProtocolType of
+    protOracle, protPostgre:
+      begin
+        Print('TODO: implement this');
+        Exit;
+      end;
+    protFirebird:
+      ;
+    else
+      Exit;
+  end;
+
+  Query := CreateQuery;
+  try
+    // Cleanup
+    Query.SQL.Text := SQLDel;
+    Query.ExecSQL;
+
+    // Let the component generate a query
+    Query.Properties.Values[DSProps_InsertReturningFields] := 'ID,FLD';
+    Query.SQL.Text := SQLSel;
+    Query.Open;
+
+    Query.Insert;
+    Query.Post;
+    CheckEquals(1, Query.Fields[D_ID].AsInteger, 'return values when input is null');
+    CheckEquals('ID1', Query.Fields[D_FLD].AsString, 'return values when input is null');
+
+    Query.Insert;
+    Query.Fields[D_ID].Value := TEST_ROW_ID;
+    Query.Post;
+    CheckEquals(TEST_ROW_ID, Query.Fields[D_ID].AsInteger, 'return values when input is not null');
+    CheckEquals('ID'+IntToStr(TEST_ROW_ID), Query.Fields[D_FLD].AsString, 'return values when input is not null');
+
+  finally
+    Query.Free;
+  end;
+end;
+
 { TZGenericTestDataSetMBCs }
 
 procedure TZGenericTestDataSetMBCs.TestVeryLargeBlobs;
-const teststring: ZWideString = '123456ééàà';
+const teststring: ZWideString = '123456????';
 var
   Query: TZQuery;
   BinStreamE,BinStreamA,TextStream: TMemoryStream;
@@ -2088,6 +2425,7 @@ begin
       TempConnection.Properties.Text := Connection.Properties.Text;
       TempConnection.Properties.Add('oidasblob=true');
       TempConnection.TransactIsolationLevel := tiReadCommitted;
+      TempConnection.AutoCommit := False;    //https://www.postgresql.org/message-id/002701c49d7e%240f059240%24d604460a%40zaphod
       TempConnection.Connect;
       Query.Connection := TempConnection;
       Connection.TransactIsolationLevel:=tiReadCommitted;
@@ -2131,7 +2469,7 @@ begin
       Params[1].LoadFromStream(TextStream, ftMemo);
       FreeAndNil(TextStream);
       BinStreamE := TMemoryStream.Create;
-      BinStreamE.LoadFromFile('../../../database/images/horse.jpg');
+      BinStreamE.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/horse.jpg');
       setlength(s,BinStreamE.Size);
       BinStreamE.Read(s[1],length(s));
       s := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}DupeString(s, 10);
@@ -2172,6 +2510,8 @@ begin
     Query.SQL.Text := 'DELETE FROM blob_values where b_id = '+ IntToStr(TEST_ROW_ID-1);
     try
       Query.ExecSQL;
+      if Assigned(TempConnection) then
+        TempConnection.Commit;
     finally
       Query.Free;
       if Assigned(TempConnection) then
@@ -2180,8 +2520,339 @@ begin
   end;
 end;
 
+{ TZInterbaseTestGUIDS }
+procedure TZGenericTestDataSet.TestEmptyMemoAfterFullMemo;
+var
+  Query: TZQuery;
+  TxtValue: String;
+  ValueIsNull: Boolean;
+begin
+  if StartsWith(LowerCase(Connection.Protocol), 'oracle') then
+    Exit;   //not resolveable with ora -> empty is always null except use the or func
+  Query := CreateQuery;
+  try
+    try
+      Query.Connection.StartTransaction;
+      try
+        Query.SQL.Text := 'insert into blob_values (b_id, b_text) values (:id, :text)';
+        Query.ParamByName('id').DataType := ftInteger;
+        Query.ParamByName('text').DataType := ftMemo;
+
+        Query.ParamByName('id').AsInteger := 2000;
+        Query.ParamByName('text').AsMemo := '/* abc */';
+        Query.ExecSQL;
+        Query.ParamByName('id').AsInteger := 2001;
+        Query.ParamByName('text').AsMemo := '';
+        Query.ExecSQL;
+        Connection.Commit;
+      except
+        Connection.Rollback;
+      end;
+
+      Query.SQL.Text := 'select * from blob_values where b_id = 2001';
+      Query.Open;
+      try
+        TxtValue := Query.FieldByName('b_text').AsString;
+        ValueIsNull := Query.FieldByName('b_text').IsNull;
+      finally
+        Query.Close;
+      end;
+
+      CheckEquals('', TxtValue, 'Tried to insert an empty clob from a paramater, after the parameter has been used before.');
+      CheckEquals(false, ValueIsNull, 'Tried to insert an empty clob from a paramater, after the parameter has been used before. IsNull should return false.');
+    finally
+      Connection.ExecuteDirect('delete from blob_values where b_id in (2000, 2001)');
+    end;
+  finally
+    FreeAndNil(Query);
+  end;
+end;
+
+{$IFDEF ENABLE_INTERBASE}
+
+const
+  TBL_NAME = 'Guids';
+  GUID_DOM_FIELD = 'GUID_DOM_FIELD';
+  GUID_TYPE_FIELD = 'GUID_TYPE_FIELD';
+  DOM_GUID = 'DOM_GUID';
+  PROC_NAME = 'GUIDTEST';
+  SelFromTblSQL = 'SELECT * FROM ' + TBL_NAME;
+  SelFromSPSQL = 'SELECT * FROM ' + PROC_NAME + '(NULL)';
+  GUID_VALUE_FB = '2F9C7089-3FA8-49E3-A4F8-BA16F53D5D86'; // value that is stored in FB (big-endian)
+  GUID_VALUE    = '89709C2F-A83F-E349-A4F8-BA16F53D5D86'; // value that is used in app (little-endian)
+
+var
+  GuidVal: TGUID;
+
+function TZInterbaseTestGUIDS.GetSupportedProtocols: string;
+begin
+  Result := pl_all_interbase;
+end;
+
+procedure TZInterbaseTestGUIDS.SetDefaults;
+begin
+  Connection.Disconnect;
+  Connection.Properties.Clear;
+  Query.SQL.Text := '';
+  Query.Properties.Clear;
+  Query.Params.Clear;
+  SP.StoredProcName := '';
+  SP.Params.Clear;
+end;
+
+procedure TZInterbaseTestGUIDS.DoTest(const TestDescr: string; TestMethod: TTestMethod);
+begin
+  SetDefaults;
+  CurrentTest := TestDescr;
+  TestMethod;
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_Type_Type;
+begin
+  Connection.Properties.Values[ConnProps_SetGUIDByType] := StrTrue;
+  Query.SQL.Text := SelFromTblSQL;
+  Query.Open;
+  CheckEquals(ftGuid, Query.FieldByName(GUID_DOM_FIELD).DataType, CurrentTest + ' ' + GUID_DOM_FIELD);
+  CheckEquals(ftGuid, Query.FieldByName(GUID_TYPE_FIELD).DataType, CurrentTest + ' ' + GUID_TYPE_FIELD);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_Type_Dom;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  Query.SQL.Text := SelFromTblSQL;
+  Query.Open;
+  CheckEquals(ftGuid, Query.FieldByName(GUID_DOM_FIELD).DataType, CurrentTest + ' ' + GUID_DOM_FIELD);
+  CheckNotEquals(ftGuid, Query.FieldByName(GUID_TYPE_FIELD).DataType, CurrentTest + ' ' + GUID_TYPE_FIELD);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_Type_FName;
+begin
+  Connection.Properties.Values[DSProps_GUIDFields] := GUID_TYPE_FIELD;
+  Query.SQL.Text := SelFromTblSQL;
+  Query.Open;
+  CheckNotEquals(ftGuid, Query.FieldByName(GUID_DOM_FIELD).DataType, CurrentTest + ' ' + GUID_DOM_FIELD);
+  CheckEquals(ftGuid, Query.FieldByName(GUID_TYPE_FIELD).DataType, CurrentTest + ' ' + GUID_TYPE_FIELD);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_GetVal;
+var
+  guid: TGUID;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  Query.SQL.Text := SelFromTblSQL;
+  Query.Open;
+  guid := TGuidField(Query.FieldByName(GUID_DOM_FIELD)).AsGuid;
+  CheckEquals(GUIDToString(GuidVal), GUIDToString(guid), CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_SetVal;
+var
+  f: TGuidField;
+  guid: TGUID;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  Query.SQL.Text := SelFromTblSQL;
+  Query.Open;
+  f := TGuidField(Query.FieldByName(GUID_DOM_FIELD));
+  Query.Edit;
+  guid := f.AsGuid;
+  Inc(guid.D2);
+  f.AsGuid := guid;
+  Query.Post;
+
+  Query.Refresh;
+  guid := GuidVal;
+  Inc(guid.D2);
+  CheckEquals(GUIDToString(guid), GUIDToString(f.AsGuid), CurrentTest);
+
+  // Return old value
+  Query.Edit;
+  f.AsGuid := GuidVal;
+  Query.Post;
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QT_ParamSetVal;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  Query.SQL.Text := 'SELECT * FROM Guids WHERE '+GUID_DOM_FIELD+'=:Guid';
+  {$IFDEF TPARAM_HAS_ASBYTES}
+  Query.Params[0].AsBytes := EncodeGUID(GuidVal).VBytes;
+  {$ELSE}
+  Exit; // temp: still can't determine right way to do it on D7
+  Query.Params[0].Value := BytesToVar(EncodeGUID(GuidVal).VBytes);
+  {$ENDIF}
+  Query.Open;
+  CheckEquals(1, Query.RecordCount, CurrentTest + ' rec count');
+  CheckEquals(GUIDToString(GuidVal), GUIDToString(TGuidField(Query.FieldByName(GUID_DOM_FIELD)).AsGuid), CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QSP_Type_Type;
+begin
+  Query.Properties.Values[DSProps_SetGUIDByType] := StrTrue;
+  Query.SQL.Text := SelFromSPSQL;
+  Query.Open;
+  CheckEquals(ftGuid, Query.Fields[0].DataType, CurrentTest);
+end;
+
+// ! No domain query for selects from SP's - domain assignment won't work
+procedure TZInterbaseTestGUIDS.Test_QSP_Type_Dom;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  Query.SQL.Text := SelFromSPSQL;
+  Query.Open;
+  CheckNotEquals(ftGuid, Query.Fields[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_QSP_Type_FName;
+begin
+  Query.Properties.Values[DSProps_GUIDFields] := 'G_OUT';
+  Query.SQL.Text := SelFromSPSQL;
+  Query.Open;
+  CheckEquals(ftGuid, Query.Fields[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_ParamType_Type;
+begin
+  Connection.Properties.Values[ConnProps_SetGUIDByType] := StrTrue;
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckEquals(ftGuid, SP.Params[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_ParamType_Dom;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckEquals(ftGuid, SP.Params[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_ParamType_Name;
+begin
+  Connection.Properties.Values[DSProps_GUIDFields] := 'G_IN';
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckEquals(ftGuid, SP.Params[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_Type_Type;
+begin
+  Connection.Properties.Values[ConnProps_SetGUIDByType] := StrTrue;
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckEquals(ftGuid, SP.Fields[0].DataType, CurrentTest);
+end;
+
+// ! No domain query for fields of SP's - domain assignment won't work
+procedure TZInterbaseTestGUIDS.Test_SP_Type_Dom;
+begin
+  Connection.Properties.Values[ConnProps_GUIDDomains] := DOM_GUID;
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckNotEquals(ftGuid, SP.Fields[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_Type_Name;
+begin
+  Connection.Properties.Values[DSProps_GUIDFields] := 'G_OUT';
+  SP.StoredProcName := PROC_NAME;
+  SP.Active := True;
+  CheckEquals(ftGuid, SP.Fields[0].DataType, CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_ParamGUIDSetVal;
+begin
+  Connection.Properties.Values[DSProps_GUIDFields] := 'G_IN,G_OUT';
+  SP.StoredProcName := PROC_NAME;
+  {$IFDEF TPARAM_HAS_ASBYTES}
+  SP.Params[0].AsBytes := EncodeGUID(GuidVal).VBytes;
+  {$ELSE}
+  Exit; // temp: still can't determine right way to do it on D7
+  SP.Params[0].Value := BytesToVar(EncodeGUID(GuidVal).VBytes);
+  {$ENDIF}
+  SP.Active := True;
+  CheckEquals(1, SP.RecordCount, CurrentTest + ' rec count');
+  CheckEquals(GUIDToString(GuidVal), GUIDToString(TGuidField(SP.FieldByName('G_OUT')).AsGuid), CurrentTest);
+end;
+
+procedure TZInterbaseTestGUIDS.Test_SP_ParamBytesSetVal;
+begin
+  Connection.Properties.Values[DSProps_GUIDFields] := 'G_IN,G_OUT';
+  SP.StoredProcName := PROC_NAME;
+  {$IFDEF TPARAM_HAS_ASBYTES}
+  SP.Params[0].AsBytes := EncodeGUID(GuidVal).VBytes;
+  SP.Active := True;
+  CheckEquals(1, SP.RecordCount, CurrentTest + ' rec count');
+  CheckEquals(GUIDToString(GuidVal), GUIDToString(TGuidField(SP.FieldByName('G_OUT')).AsGuid), CurrentTest);
+  {$ENDIF}
+end;
+
+procedure TZInterbaseTestGUIDS.Test;
+var GuidHex: string;
+begin
+  // Init variables
+  GuidVal := StringToGUID('{'+GUID_VALUE+'}');
+  GuidHex := StringReplace(GUID_VALUE_FB, '-', '', [rfReplaceAll]);
+  // set value to DB table
+  Connection.Connect;
+  Connection.ExecuteDirect(
+    Format('DELETE FROM %s', [TBL_NAME]));
+  Connection.ExecuteDirect(
+    Format('INSERT INTO %s (ID, %s) VALUES(1, x''%s'')', [TBL_NAME, GUID_DOM_FIELD, GuidHex]));
+  Connection.Disconnect;
+
+  Query := CreateQuery;
+  SP := TZStoredProc.Create(nil);
+  SP.Connection := Connection;
+
+  // Now run tests
+  DoTest('Query from table: GUID type by type', Test_QT_Type_Type);
+  DoTest('Query from table: GUID type by domain', Test_QT_Type_Dom);
+  DoTest('Query from table: GUID type by field name', Test_QT_Type_FName);
+  DoTest('Query from table: get GUID value', Test_QT_GetVal);
+  DoTest('Query from table: set GUID value', Test_QT_SetVal);
+  DoTest('Query from table: set param GUID value', Test_QT_ParamSetVal);
+  DoTest('Query from SP: GUID type by type', Test_QSP_Type_Type);
+  DoTest('Query from SP: GUID type by domain (false)', Test_QSP_Type_Dom);
+  DoTest('Query from SP: GUID type by field name', Test_QSP_Type_FName);
+  DoTest('SP: GUID type of param by type', Test_SP_ParamType_Type);
+  DoTest('SP: GUID type of param by domain', Test_SP_ParamType_Dom);
+  DoTest('SP: GUID type of param by name', Test_SP_ParamType_Name);
+  DoTest('SP: GUID type of field by type', Test_SP_Type_Type);
+  DoTest('SP: GUID type of field by domain (false)', Test_SP_Type_Dom);
+  DoTest('SP: GUID type of field by name', Test_SP_Type_Name);
+  DoTest('SP: set param GUID value, type ftGUID', Test_SP_ParamGUIDSetVal);
+  DoTest('SP: set param GUID value, type ftBytes', Test_SP_ParamBytesSetVal);
+
+  FreeAndNil(Query);
+  FreeAndNil(SP);
+end;
+
+procedure TZInterbaseTestGUIDS.CheckEquals(expected, actual: TFieldType;
+  msg: string);
+begin
+  CheckEquals(
+    GetEnumName(TypeInfo(TFieldType), Integer(expected)),
+    GetEnumName(TypeInfo(TFieldType), Integer(actual)),
+    msg
+   );
+end;
+
+procedure TZInterbaseTestGUIDS.CheckNotEquals(expected, actual: TFieldType;
+  msg: string);
+begin
+  CheckNotEquals(
+    GetEnumName(TypeInfo(TFieldType), Integer(expected)),
+    GetEnumName(TypeInfo(TFieldType), Integer(actual)),
+    msg
+   );
+end;
+{$ENDIF}
+
 initialization
   RegisterTest('component',TZGenericTestDataSet.Suite);
   RegisterTest('component',TZGenericTestDataSetMBCs.Suite);
+  {$IFDEF ENABLE_INTERBASE}
+  RegisterTest('component',TZInterbaseTestGUIDS.Suite);
+  {$ENDIF}
 end.
-

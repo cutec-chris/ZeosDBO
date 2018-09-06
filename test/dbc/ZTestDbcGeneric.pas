@@ -57,7 +57,7 @@ interface
 
 uses
   Classes, {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, SysUtils, ZDbcIntfs, ZSqlTestCase,
-  ZCompatibility;
+  ZCompatibility, Types;
 
 type
   {** Implements a test case for . }
@@ -65,10 +65,9 @@ type
   { TZGenericTestDbcResultSet }
 
   TZGenericTestDbcResultSet = class(TZAbstractDbcSQLTestCase)
-  private
-  protected
   published
     procedure TestConnection;
+    procedure TestCommitBehavior;
     procedure TestStatement;
     procedure TestPreparedStatement;
     procedure TestStoredResultSetUpdate;
@@ -81,13 +80,75 @@ type
     procedure TestStringGetter;
     procedure TestStringToSignedIntegerConversions;
     procedure TestStringToUnsignedIntegerConversions;
+    procedure TestAfterLast;
+    procedure TestQuestionMarks;
+  end;
+
+  TZGenericTestDbcArrayBindings = class(TZAbstractDbcSQLTestCase)
+  private
+    hl_idArray: TIntegerDynArray;
+    stBooleanArray: TBooleanDynArray;
+    stByteArray: TByteDynArray;
+    stShortArray: TShortIntDynArray;
+    stLongArray: TInt64DynArray;
+    stIntegerArray: TIntegerDynArray;
+    stFloatArray: TSingleDynArray;
+    stDoubleArray: TDoubleDynArray;
+    stBigDecimalArray: TExtendedDynArray;
+    stStringArray: TRawByteStringDynArray;
+    stUnicodeStringArray: TUnicodeStringDynArray;
+    stBytesArray: TBytesDynArray;
+    stDateArray: TDateTimeDynArray;
+    stTimeArray: TDateTimeDynArray;
+    stTimeStampArray: TDateTimeDynArray;
+    stGUIDArray: TGUIDDynArray;
+    stAsciiStreamArray: TZCharRecDynArray;
+    stUnicodeStreamArray: TUTF8StringDynArray;
+    stBinaryStreamArray: TInterfaceDynArray;
+    stBooleanNullArray: array of TBooleanDynArray;
+    stByteNullArray: array of TByteDynArray;
+    stShortNullArray: array of TShortIntDynArray;
+    stWordNullArray: array of TWordDynArray;
+    stSmallNullArray: array of TSmallIntDynArray;
+    stLongWordNullArray: array of TLongWordDynArray;
+    stIntegerNullArray: array of TIntegerDynArray;
+    stULongNullArray: array of TUInt64DynArray;
+    stLongNullArray: array of TInt64DynArray;
+    stFloatNullArray: array of TSingleDynArray;
+    stDoubleNullArray: array of TDoubleDynArray;
+    stCurrencyNullArray: array of TCurrencyDynArray;
+    stBigDecimalNullArray: array of TExtendedDynArray;
+    stStringNullArray: array of TRawByteStringDynArray;
+    stUnicodeStringNullArray: array of TUnicodeStringDynArray;
+    procedure InternalTestArrayBinding(PStatement: IZPreparedStatement;
+      FirstID, ArrayLen, LastFieldIndex: Integer);
+  published
+    procedure TestArrayBindings;
   end;
 
 implementation
 
-uses ZSysUtils, ZTestConsts, ZFastCode;
+uses ZSysUtils, ZTestConsts, ZFastCode, ZVariant, ZDbcResultSet, StrUtils;
 
 { TZGenericTestDbcResultSet }
+procedure TZGenericTestDbcResultSet.TestAfterLast;
+var
+  Statement: IZStatement;
+  ResultSet: IZResultSet;
+begin
+  Statement := Connection.CreateStatement;
+  Resultset := Statement.ExecuteQuery('select * from people');
+  try
+    while ResultSet.Next do;
+    Check(ResultSet.IsAfterLast, 'Missing afterlast logic');
+  finally
+    ResultSet.Close;
+    ResultSet := nil;
+    Statement.Close;
+    Statement := nil;
+  end;
+end;
+
 {**
    Test table with aliases
 }
@@ -103,71 +164,77 @@ begin
   CheckNotNull(Statement);
   Statement.SetResultSetType(rtScrollInsensitive);
   Statement.SetResultSetConcurrency(rcUpdatable);
+  try
+    Sql := 'DELETE FROM people where p_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
+    Sql := 'DELETE FROM equipment where eq_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
 
-  Sql := 'DELETE FROM people where p_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
-  Connection.CreateStatement.ExecuteUpdate(Sql);
-  Sql := 'DELETE FROM equipment where eq_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
-  Connection.CreateStatement.ExecuteUpdate(Sql);
+    { Tests the equipment table }
+    Sql := 'SELECT a.eq_id as id, a.eq_name as name, a.eq_type as type1,'
+      + ' a.eq_cost + 10 as cost FROM equipment a where a.eq_id = '
+      + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    { Inserts test record to equipment }
+    ResultSet := Statement.ExecuteQuery(Sql);
+    CheckNotNull(ResultSet);
+    PrintResultSet(ResultSet, True, '1. ' + Sql);
+    with ResultSet do
+    begin
+      MoveToInsertRow;
+      UpdateIntByName('id', TEST_ROW_ID);
+      UpdateNullByName('name');
+      UpdateNullByName('type1');
+      UpdateNullByName('cost');
+      InsertRow;
+      Close;
+    end;
+    ResultSet := nil;
 
-  { Tests the equipment table }
-  Sql := 'SELECT a.eq_id as id, a.eq_name as name, a.eq_type as type1,'
-    + ' a.eq_cost + 10 as cost FROM equipment a where a.eq_id = '
-    + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
-  { Inserts test record to equipment }
-  ResultSet := Statement.ExecuteQuery(Sql);
-  CheckNotNull(ResultSet);
-  PrintResultSet(ResultSet, True, '1. ' + Sql);
-  with ResultSet do
-  begin
-    MoveToInsertRow;
-    UpdateIntByName('id', TEST_ROW_ID);
-    UpdateNullByName('name');
-    UpdateNullByName('type1');
-    UpdateNullByName('cost');
-    InsertRow;
-    Close;
+    { Updates row for equipment}
+    ResultSet := Statement.ExecuteQuery(Sql);
+    CheckNotNull(ResultSet);
+    PrintResultSet(ResultSet, True, '2. ' + Sql);
+    with ResultSet do
+    begin
+      Check(Next);
+      CheckEquals(TEST_ROW_ID, GetIntByName('id'));
+      CheckEquals(True, IsNullByName('name'));
+      CheckEquals(True, IsNullByName('type1'));
+      CheckEquals(True, IsNullByName('cost'));
+
+      UpdateStringByName('name', 'The some thing');
+      UpdateIntByName('type1', 1);
+      UpdateDoubleByName('cost', 12345.678);
+      UpdateRow;
+      Close;
+    end;
+
+    { Checks previous updated row}
+    ResultSet := Statement.ExecuteQuery(Sql);
+    CheckNotNull(ResultSet);
+    PrintResultSet(ResultSet, True, '3. ' + Sql);
+    with ResultSet do
+    begin
+      Check(Next);
+      CheckEquals('The some thing', GetStringByName('name'));
+      CheckEquals(1, GetIntByName('type1'));
+  // Column cost is calculated is can't be updated
+  //    CheckEquals(12355.678, GetFloatByName('cost'), 0.01);
+      DeleteRow;
+      Close;
+    end;
+
+    { Checks what record deleted }
+    ResultSet := Statement.ExecuteQuery(Sql);
+    CheckNotNull(ResultSet);
+    PrintResultSet(ResultSet, True, '4. ' + Sql);
+    CheckEquals(False, ResultSet.Next);
+  finally
+    Sql := 'DELETE FROM people where p_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
+    Sql := 'DELETE FROM equipment where eq_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
   end;
-  ResultSet := nil;
-
-  { Updates row for equipment}
-  ResultSet := Statement.ExecuteQuery(Sql);
-  CheckNotNull(ResultSet);
-  PrintResultSet(ResultSet, True, '2. ' + Sql);
-  with ResultSet do
-  begin
-    Check(Next);
-    CheckEquals(TEST_ROW_ID, GetIntByName('id'));
-    CheckEquals(True, IsNullByName('name'));
-    CheckEquals(True, IsNullByName('type1'));
-    CheckEquals(True, IsNullByName('cost'));
-
-    UpdateStringByName('name', 'The some thing');
-    UpdateIntByName('type1', 1);
-    UpdateDoubleByName('cost', 12345.678);
-    UpdateRow;
-    Close;
-  end;
-
-  { Checks previous updated row}
-  ResultSet := Statement.ExecuteQuery(Sql);
-  CheckNotNull(ResultSet);
-  PrintResultSet(ResultSet, True, '3. ' + Sql);
-  with ResultSet do
-  begin
-    Check(Next);
-    CheckEquals('The some thing', GetStringByName('name'));
-    CheckEquals(1, GetIntByName('type1'));
-// Column cost is calculated is can't be updated
-//    CheckEquals(12355.678, GetFloatByName('cost'), 0.01);
-    DeleteRow;
-    Close;
-  end;
-
-  { Checks what record deleted }
-  ResultSet := Statement.ExecuteQuery(Sql);
-  CheckNotNull(ResultSet);
-  PrintResultSet(ResultSet, True, '4. ' + Sql);
-  CheckEquals(False, ResultSet.Next);
 end;
 
 {**
@@ -185,22 +252,17 @@ var
   ResultSet: IZResultSet;
   Metadata: IZDatabaseMetadata;
 begin
-  if StartsWith(Protocol, 'mysql') or StartsWith(Protocol, 'mysql') or
-    StartsWith(Protocol, 'FreeTDS') or ( Protocol = 'mssql') or
-    ( Protocol = 'ado') or ( Protocol = 'sybase') or
-    StartsWith(Protocol, 'ASA') or StartsWith(Protocol, 'OleDB') then
-    Exit;
+  if ProtocolType in [protMySQL, protSQLite, protFreeTDS, protMSSQL,
+                      protADO, protSyBase, protASA, protOleDB] then
+    Exit; //not in build sripts because they depend to locale settings
 
   Metadata := Connection.GetMetadata;
-  if Metadata.GetDatabaseInfo.SupportsMixedCaseIdentifiers then
+  if not Metadata.GetDatabaseInfo.SupportsMixedCaseQuotedIdentifiers then
     Exit;
-
-  Sql := 'DELETE FROM "Case_Sensitive" where cs_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
-  Connection.CreateStatement.ExecuteUpdate(Sql);
-  Sql := 'DELETE FROM case_sensitive where cs_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+  Sql := 'DELETE FROM '+MetaData.GetIdentifierConvertor.Quote('Case_Sensitive')+' where cs_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
   Connection.CreateStatement.ExecuteUpdate(Sql);
 
-  Sql := 'SELECT * FROM "Case_Sensitive" WHERE cs_id = ?';
+  Sql := 'SELECT * FROM '+MetaData.GetIdentifierConvertor.Quote('Case_Sensitive')+' WHERE cs_id = ?';
   { Inserts row to "Case_Sensitive" table }
   Statement := Connection.PrepareStatement(Sql);
   CheckNotNull(Statement);
@@ -364,8 +426,9 @@ begin
 //  CheckEquals(True, Connection.IsClosed);
   CheckEquals(True, Connection.GetAutoCommit);
   Connection.SetAutoCommit(False);
-  if Connection.GetMetadata.GetDatabaseInfo.SupportsTransactionIsolationLevel(tiNone) then
-    CheckEquals(Ord(tiNone), Ord(Connection.GetTransactionIsolation));
+  if Connection.GetMetadata.GetDatabaseInfo.SupportsTransactionIsolationLevel(tiNone)
+  then CheckEquals(Ord(tiNone), Ord(Connection.GetTransactionIsolation))
+  else CheckEquals(Ord(Connection.GetMetadata.GetDatabaseInfo.GetDefaultTransactionIsolation), Ord(Connection.GetTransactionIsolation));
 
   { Checks without transactions. }
   CheckNotNull(Connection.CreateStatement);
@@ -422,150 +485,176 @@ begin
   Connection.CreateStatement.ExecuteUpdate(Sql);
   Sql := 'DELETE FROM equipment where eq_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
   Connection.CreateStatement.ExecuteUpdate(Sql);
+  try
+    { The test for equipment table }
 
-  { The test for equipment table }
+    { Creates prepared statement for equipment table }
+    Statement := Connection.PrepareStatement(
+      'INSERT INTO equipment (eq_id, eq_name, eq_type, eq_cost, eq_date, '
+      + ' woff_date) VALUES(?,?,?,?,?,?)');
+    CheckNotNull(Statement);
+    with Statement do
+    begin
+      SetInt(Insert_eq_id_Index, TEST_ROW_ID);
+      SetString(Insert_eq_name_Index, 'xyz');
+      SetInt(Insert_eq_type_Index, 7);
+      SetDouble(Insert_eq_cost_Index, 1234.567);
+      SetDate(Insert_eq_date_Index, EncodeDate(1999, 8, 5));
+      SetNull(Insert_woff_date_Index, stDate);
+      CheckEquals(False, ExecutePrepared);
+      CheckEquals(1, GetUpdateCount);
+    end;
+    Statement := nil;
 
-  { Creates prepared statement for equipment table }
-  Statement := Connection.PrepareStatement(
-    'INSERT INTO equipment (eq_id, eq_name, eq_type, eq_cost, eq_date, '
-    + ' woff_date) VALUES(?,?,?,?,?,?)');
-  CheckNotNull(Statement);
-  with Statement do
-  begin
-    SetInt(Insert_eq_id_Index, TEST_ROW_ID);
-    SetString(Insert_eq_name_Index, 'xyz');
-    SetInt(Insert_eq_type_Index, 7);
-    SetDouble(Insert_eq_cost_Index, 1234.567);
-    SetDate(Insert_eq_date_Index, EncodeDate(1999, 8, 5));
-    SetNull(Insert_woff_date_Index, stDate);
-    CheckEquals(False, ExecutePrepared);
-    CheckEquals(1, GetUpdateCount);
+    { Checks inserted row from equipment table }
+    Statement := Connection.PrepareStatement(
+      'SELECT * FROM equipment WHERE eq_id = ?');
+    CheckNotNull(Statement);
+    Statement.SetInt(Select_eq_id_Index, TEST_ROW_ID);
+    ResultSet := Statement.ExecuteQueryPrepared;
+    CheckNotNull(ResultSet);
+    with ResultSet do
+    begin
+      Check(Next);
+      CheckEquals('xyz', GetStringByName('eq_name'));
+      CheckEquals(7, GetIntByName('eq_type'));
+      CheckEquals(1234.567, GetDoubleByName('eq_cost'), 0.001);
+      CheckEquals(EncodeDate(1999, 8, 5), GetDateByName('eq_date'));
+      CheckEquals(True, IsNullByName('woff_date'));
+      Close;
+    end;
+    ResultSet := nil;
+
+    { Updates inserted row from equipment table }
+    Statement := Connection.PrepareStatement(
+      'UPDATE equipment SET eq_name = ? WHERE eq_id = ?' );
+    CheckNotNull(Statement);
+    with Statement do
+    begin
+      SetString(Inserted_eq_name_Index, 'xyz1');
+      SetInt(Inserted_eq_id_Index, TEST_ROW_ID);
+      CheckEquals(1, ExecuteUpdatePrepared);
+    end;
+    Statement := nil;
+
+    { Deletes inserted row from equipment table }
+    Statement := Connection.PrepareStatement(
+      'DELETE FROM equipment WHERE eq_id = ?');
+    CheckNotNull(Statement);
+    with Statement do
+    begin
+      SetInt(Delete_eq_id_Index, TEST_ROW_ID);
+      CheckEquals(False, ExecutePrepared);
+      CheckEquals(1, GetUpdateCount);
+    end;
+    Statement := nil;
+
+    { The test for people table }
+
+    { Creates prepared statement for people table }
+    Statement := Connection.PrepareStatement(
+      'INSERT INTO people (p_id, p_dep_id, p_name, p_begin_work, p_end_work,'
+      + ' p_picture, p_resume, p_redundant) VALUES(?,?,?,?,?,?,?,?)');
+    CheckNotNull(Statement);
+    { Sets prepared statement parameters values. }
+    with Statement do
+    begin
+      SetInt(Insert_p_id_Index, TEST_ROW_ID);
+      SetInt(Insert_p_dep_id_Index, 2);
+      SetString(Insert_p_name_Index, 'xyz');
+      SetTime(Insert_p_begin_work_Index, EncodeTime(8, 0, 0, 0));
+      SetTime(Insert_p_end_work_Index, EncodeTime(17, 30, 0, 0));
+
+      BinStream := TMemoryStream.Create;
+      BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
+      BinStream.Size := 1024;
+      SetBinaryStream(Insert_p_picture_Index, BinStream);
+
+      StrStream := TMemoryStream.Create;
+      StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
+      StrStream.Size := 1024;
+      SetAsciiStream(Insert_p_resume_Index, StrStream);
+      if ProtocolType = protPostgre then //PQExecParams can't convert str to smallint
+        SetNull(Insert_p_redundant_Index, stSmall)
+      else
+        SetNull(Insert_p_redundant_Index, stString);
+      SetNull(Insert_p_redundant_Index, stString);
+      CheckEquals(False, ExecutePrepared);
+      CheckEquals(1, GetUpdateCount);
+    end;
+    Statement := nil;
+
+    { Checks inserted row. }
+    Statement := Connection.PrepareStatement(
+      'SELECT * FROM people WHERE p_id = ?');
+    CheckNotNull(Statement);
+    Statement.SetInt(Select_p_id_Index, TEST_ROW_ID);
+    ResultSet := Statement.ExecuteQueryPrepared;
+    CheckNotNull(ResultSet);
+    with ResultSet do
+    begin
+      Check(Next);
+      CheckEquals(TEST_ROW_ID, GetIntByName('p_id'));
+      CheckEquals(2, GetIntByName('p_dep_id'));
+      CheckEquals('xyz', GetStringByName('p_name'));
+      CheckEquals(EncodeTime(8, 0, 0, 0), GetTimeByName('p_begin_work'), 0.0001);
+      CheckEquals(EncodeTime(17, 30, 0, 0), GetTimeByName('p_end_work'), 0.0001);
+      CheckEquals(False, IsNullByName('p_picture'));
+      CheckEquals(False, IsNullByName('p_resume'));
+      CheckEquals(0, GetIntByName('p_redundant'));
+
+      { Compares aciistream }
+      StrStream1 := GetAsciiStreamByName('p_resume');
+      CheckEquals(StrStream, StrStream1, 'Ascii Stream');
+      StrStream.Free;
+      StrStream1.Free;
+
+      { Compares BinaryStream }
+      BinStream1 := GetBinaryStreamByName('p_picture');
+      CheckEquals(BinStream, BinStream1, 'Binary Stream');
+      BinStream.Free;
+      BinStream1.Free;
+      Close;
+    end;
+    ResultSet := nil;
+
+
+    { Deletes the row. }
+    Statement := Connection.PrepareStatement(
+      'DELETE FROM people WHERE p_id=?');
+    CheckNotNull(Statement);
+    with Statement do
+    begin
+      SetInt(Delete_p_id_Index, TEST_ROW_ID);
+      CheckEquals(False, ExecutePrepared);
+      CheckEquals(1, GetUpdateCount);
+    end;
+    Statement := nil;
+  finally
+    Sql := 'DELETE FROM people where p_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
+    Sql := 'DELETE FROM equipment where eq_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
+    Connection.CreateStatement.ExecuteUpdate(Sql);
   end;
-  Statement := nil;
-
-  { Checks inserted row from equipment table }
-  Statement := Connection.PrepareStatement(
-    'SELECT * FROM equipment WHERE eq_id = ?');
-  CheckNotNull(Statement);
-  Statement.SetInt(Select_eq_id_Index, TEST_ROW_ID);
-  ResultSet := Statement.ExecuteQueryPrepared;
-  CheckNotNull(ResultSet);
-  with ResultSet do
-  begin
-    Check(Next);
-    CheckEquals('xyz', GetStringByName('eq_name'));
-    CheckEquals(7, GetIntByName('eq_type'));
-    CheckEquals(1234.567, GetDoubleByName('eq_cost'), 0.001);
-    CheckEquals(EncodeDate(1999, 8, 5), GetDateByName('eq_date'));
-    CheckEquals(True, IsNullByName('woff_date'));
-    Close;
-  end;
-  ResultSet := nil;
-
-  { Updates inserted row from equipment table }
-  Statement := Connection.PrepareStatement(
-    'UPDATE equipment SET eq_name = ? WHERE eq_id = ?' );
-  CheckNotNull(Statement);
-  with Statement do
-  begin
-    SetString(Inserted_eq_name_Index, 'xyz1');
-    SetInt(Inserted_eq_id_Index, TEST_ROW_ID);
-    CheckEquals(1, ExecuteUpdatePrepared);
-  end;
-  Statement := nil;
-
-  { Deletes inserted row from equipment table }
-  Statement := Connection.PrepareStatement(
-    'DELETE FROM equipment WHERE eq_id = ?');
-  CheckNotNull(Statement);
-  with Statement do
-  begin
-    SetInt(Delete_eq_id_Index, TEST_ROW_ID);
-    CheckEquals(False, ExecutePrepared);
-    CheckEquals(1, GetUpdateCount);
-  end;
-  Statement := nil;
-
-  { The test for people table }
-
-  { Creates prepared statement for people table }
-  Statement := Connection.PrepareStatement(
-    'INSERT INTO people (p_id, p_dep_id, p_name, p_begin_work, p_end_work,'
-    + ' p_picture, p_resume, p_redundant) VALUES(?,?,?,?,?,?,?,?)');
-  CheckNotNull(Statement);
-  { Sets prepared statement parameters values. }
-  with Statement do
-  begin
-    SetInt(Insert_p_id_Index, TEST_ROW_ID);
-    SetInt(Insert_p_dep_id_Index, 2);
-    SetString(Insert_p_name_Index, 'xyz');
-    SetTime(Insert_p_begin_work_Index, EncodeTime(8, 0, 0, 0));
-    SetTime(Insert_p_end_work_Index, EncodeTime(17, 30, 0, 0));
-
-    BinStream := TMemoryStream.Create;
-    BinStream.LoadFromFile('../../../database/images/dogs.jpg');
-    BinStream.Size := 1024;
-    SetBinaryStream(Insert_p_picture_Index, BinStream);
-
-    StrStream := TMemoryStream.Create;
-    StrStream.LoadFromFile('../../../database/text/lgpl.txt');
-    StrStream.Size := 1024;
-    SetAsciiStream(Insert_p_resume_Index, StrStream);
-
-    SetNull(Insert_p_redundant_Index, stString);
-    CheckEquals(False, ExecutePrepared);
-    CheckEquals(1, GetUpdateCount);
-  end;
-  Statement := nil;
-
-  { Checks inserted row. }
-  Statement := Connection.PrepareStatement(
-    'SELECT * FROM people WHERE p_id = ?');
-  CheckNotNull(Statement);
-  Statement.SetInt(Select_p_id_Index, TEST_ROW_ID);
-  ResultSet := Statement.ExecuteQueryPrepared;
-  CheckNotNull(ResultSet);
-  with ResultSet do
-  begin
-    Check(Next);
-    CheckEquals(TEST_ROW_ID, GetIntByName('p_id'));
-    CheckEquals(2, GetIntByName('p_dep_id'));
-    CheckEquals('xyz', GetStringByName('p_name'));
-    CheckEquals(EncodeTime(8, 0, 0, 0), GetTimeByName('p_begin_work'), 0.0001);
-    CheckEquals(EncodeTime(17, 30, 0, 0), GetTimeByName('p_end_work'), 0.0001);
-    CheckEquals(False, IsNullByName('p_picture'));
-    CheckEquals(False, IsNullByName('p_resume'));
-    CheckEquals(0, GetIntByName('p_redundant'));
-
-    { Compares aciistream }
-    StrStream1 := GetAsciiStreamByName('p_resume');
-    CheckEquals(StrStream, StrStream1, 'Ascii Stream');
-    StrStream.Free;
-    StrStream1.Free;
-
-    { Compares BinaryStream }
-    BinStream1 := GetBinaryStreamByName('p_picture');
-    CheckEquals(BinStream, BinStream1, 'Binary Stream');
-    BinStream.Free;
-    BinStream1.Free;
-    Close;
-  end;
-  ResultSet := nil;
-
-
-  { Deletes the row. }
-  Statement := Connection.PrepareStatement(
-    'DELETE FROM people WHERE p_id=?');
-  CheckNotNull(Statement);
-  with Statement do
-  begin
-    SetInt(Delete_p_id_Index, TEST_ROW_ID);
-    CheckEquals(False, ExecutePrepared);
-    CheckEquals(1, GetUpdateCount);
-  end;
-  Statement := nil;
 end;
 
+//see: http://zeoslib.sourceforge.net/viewtopic.php?f=38&p=95669#p95669
+procedure TZGenericTestDbcResultSet.TestQuestionMarks;
+var Stmt: IZPreparedStatement;
+begin
+  Stmt := Connection.PrepareStatement(
+    '/*?? do we find these ?question-marks? as parameter ? */'+
+    'select * from people where p_id > ?'+LineEnding+
+    '/* ? and those marks? Are they ignored too?'+LineEnding+
+    '? Are they ignored on a multi-line comment as well?*/'+LineEnding+
+    '-- ? and those marks? Are they ignored too? On a single line comment?');
+  Stmt.SetInt(FirstDbcIndex, 1);
+  with stmt.ExecuteQueryPrepared do begin
+    Next;
+    Close;
+  end;
+  Stmt.Close;
+end;
 
 {**
   Checks functionality execute statement
@@ -835,10 +924,10 @@ begin
 
   Sql := 'SELECT * FROM people where p_id = ' + ZFastCode.IntToStr(Integer(TEST_ROW_ID));
   StrStream := TMemoryStream.Create;
-  StrStream.LoadFromFile('../../../database/text/lgpl.txt');
+  StrStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/lgpl.txt');
   StrStream.Size := 1024;
   BinStream := TMemoryStream.Create;
-  BinStream.LoadFromFile('../../../database/images/dogs.jpg');
+  BinStream.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/images/dogs.jpg');
   BinStream.Size := 1024;
   StrStream1 := nil;
   BinStream1 := nil;
@@ -1014,7 +1103,7 @@ var
   Statement: IZStatement;
   ResultSet: IZResultSet;
 begin
-  if StartsWith(Protocol, 'oracle') then Exit; //oracle doesnt allow '' values for not null columns
+  if ProtocolType = protOracle then Exit; //oracle doesnt allow '' values for not null columns
 
   Statement := Connection.CreateStatement;
   CheckNotNull(Statement);
@@ -1063,42 +1152,160 @@ begin
   end;
 end;
 
+procedure TZGenericTestDbcResultSet.TestCommitBehavior;
+var Stmt: IZStatement;
+  I: Integer;
+begin
+  CheckEquals(False, Connection.IsReadOnly);
+  CheckEquals(True, Connection.GetAutoCommit);
+  if Connection.GetMetadata.GetDatabaseInfo.SupportsTransactionIsolationLevel(tiNone)
+  then CheckEquals(Ord(tiNone), Ord(Connection.GetTransactionIsolation))
+  else CheckEquals(Ord(Connection.GetMetadata.GetDatabaseInfo.GetDefaultTransactionIsolation), Ord(Connection.GetTransactionIsolation));
+
+  Stmt := Connection.CreateStatement;
+  CheckNotNull(Stmt);
+  CheckEquals(False, Connection.IsClosed);
+  for i := 0 to 10 do begin
+    Stmt.ExecuteUpdate('insert into people(p_id, p_name) values (1000, ''miab3'')');
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(not Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.Close;
+  end;
+
+  Connection.SetAutoCommit(False);
+  { Checks without transactions. }
+  Stmt := Connection.CreateStatement;
+  CheckNotNull(Stmt);
+  CheckEquals(False, Connection.IsClosed);
+  for i := 0 to 10 do begin
+    Stmt.ExecuteUpdate('insert into people(p_id, p_name) values (1000, ''miab3'')');
+    Connection.Commit;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    Connection.Rollback;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong rollback behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    Connection.Commit;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(not Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.Close;
+  end;
+  Connection.Close;
+  CheckEquals(True, Connection.IsClosed);
+
+  { Checks with transactions. }
+  Connection.SetTransactionIsolation(tiReadCommitted);
+  Connection.SetAutoCommit(True);
+  Stmt := Connection.CreateStatement;
+  CheckNotNull(Stmt);
+  CheckEquals(False, Connection.IsClosed);
+  for i := 0 to 10 do begin
+    Stmt.ExecuteUpdate('insert into people(p_id, p_name) values (1000, ''miab3'')');
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(not Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.Close;
+  end;
+  for i := 0 to 100 do
+    Connection.SetAutoCommit(i mod 2 = 0);
+  Connection.Close;
+  CheckEquals(True, Connection.IsClosed);
+
+  Connection.SetAutoCommit(False);
+  { Checks without transactions. }
+  Stmt := Connection.CreateStatement;
+  CheckNotNull(Stmt);
+  CheckEquals(False, Connection.IsClosed);
+  for i := 0 to 10 do begin
+    Stmt.ExecuteUpdate('insert into people(p_id, p_name) values (1000, ''miab3'')');
+    Connection.Commit;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    Connection.Rollback;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(Next, 'wrong rollback behavior');
+      Close;
+    end;
+    Stmt.ExecuteUpdate('delete from people where p_id = 1000');
+    Connection.Commit;
+    with Stmt.ExecuteQuery('select * from people where p_id = 1000') do begin
+      Check(not Next, 'wrong commit behavior');
+      Close;
+    end;
+    Stmt.Close;
+  end;
+  Connection.Close;
+  CheckEquals(True, Connection.IsClosed);
+end;
+
 procedure TZGenericTestDbcResultSet.TestConcurrency;
 var
   Statement: IZStatement;
+  Statement2: IZStatement;
   ResultSet1: IZResultSet;
   ResultSet2: IZResultSet;
+  ResultSet3: IZResultSet;
 begin
   Statement := Connection.CreateStatement;
+  Statement2 := Connection.CreateStatement;
   CheckNotNull(Statement);
 
   try
     ResultSet1 := Statement.ExecuteQuery('select * from people');
     ResultSet2 := Statement.ExecuteQuery('select * from equipment');
+    ResultSet3 := Statement2.ExecuteQuery('select * from people');
     try
-      Check(ResultSet1.Next);
+      Check(not ResultSet1.Next, 'Resultset 1 should be closed');
       Check(ResultSet2.Next);
-      Check(ResultSet1.Next);
+      Check(ResultSet3.Next);
       Check(ResultSet2.Next);
-      Check(ResultSet1.Next);
+      Check(ResultSet3.Next);
       Check(ResultSet2.Next);
+      Check(ResultSet3.Next);
     finally
       ResultSet1.Close;
       ResultSet2.Close;
+      ResultSet3.Close;
     end;
   finally
     Statement.Close;
+    Statement2.Close;
   end;
 end;
 
-{$WARNINGS OFF}
 procedure TZGenericTestDbcResultSet.TestStringGetter;
 const
   p_name_Index = {$IFDEF GENERIC_INDEX}2{$ELSE}3{$ENDIF};
+  SNames: array[0..4] of string =
+    ('Vasia Pupkin', 'Andy Karto', 'Kristen Sato', 'Aleksey Petrov', 'Yan Pater');
 var
   Statement: IZStatement;
   ResultSet: IZResultSet;
-  Len: NativeUInt;
+  Len, name: NativeUInt;
 begin
   Statement := Connection.CreateStatement;
   CheckNotNull(Statement);
@@ -1106,61 +1313,20 @@ begin
   try
     ResultSet := Statement.ExecuteQuery('select * from people');
     try
-      Check(ResultSet.Next);
-      CheckEquals('Vasia Pupkin', ResultSet.GetString(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetAnsiString(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetUTF8String(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetRawByteString(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetUnicodeString(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetPAnsiChar(p_name_Index));
-      CheckEquals(RawByteString('Vasia Pupkin'), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
-      CheckEquals('Vasia Pupkin', ResultSet.GetPChar(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetPWideChar(p_name_Index));
-      CheckEquals('Vasia Pupkin', ResultSet.GetPWideChar(p_name_Index, Len));
-      Check(ResultSet.Next);
-      CheckEquals('Andy Karto', ResultSet.GetString(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetAnsiString(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetUTF8String(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetRawByteString(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetUnicodeString(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetPAnsiChar(p_name_Index));
-      CheckEquals(RawByteString('Andy Karto'), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
-      CheckEquals('Andy Karto', ResultSet.GetPChar(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetPWideChar(p_name_Index));
-      CheckEquals('Andy Karto', ResultSet.GetPWideChar(p_name_Index, Len));
-      Check(ResultSet.Next);
-      CheckEquals('Kristen Sato', ResultSet.GetString(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetAnsiString(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetUTF8String(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetRawByteString(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetUnicodeString(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetPAnsiChar(p_name_Index));
-      CheckEquals(RawByteString('Kristen Sato'), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
-      CheckEquals('Kristen Sato', ResultSet.GetPChar(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetPWideChar(p_name_Index));
-      CheckEquals('Kristen Sato', ResultSet.GetPWideChar(p_name_Index, Len));
-      Check(ResultSet.Next);
-      CheckEquals('Aleksey Petrov', ResultSet.GetString(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetAnsiString(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetUTF8String(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetRawByteString(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetUnicodeString(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetPAnsiChar(p_name_Index));
-      CheckEquals(RawByteString('Aleksey Petrov'), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
-      CheckEquals('Aleksey Petrov', ResultSet.GetPChar(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetPWideChar(p_name_Index));
-      CheckEquals('Aleksey Petrov', ResultSet.GetPWideChar(p_name_Index, Len));
-      Check(ResultSet.Next);
-      CheckEquals('Yan Pater', ResultSet.GetString(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetAnsiString(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetUTF8String(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetRawByteString(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetUnicodeString(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetPAnsiChar(p_name_Index));
-      CheckEquals(RawByteString('Yan Pater'), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
-      CheckEquals('Yan Pater', ResultSet.GetPChar(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetPWideChar(p_name_Index));
-      CheckEquals('Yan Pater', ResultSet.GetPWideChar(p_name_Index, Len));
+      for name := Low(SNames) to High(SNames) do
+      begin
+        Check(ResultSet.Next);
+        CheckEquals(SNames[name], ResultSet.GetString(p_name_Index));
+        CheckEquals(AnsiString(SNames[name]), ResultSet.GetAnsiString(p_name_Index));
+        CheckEquals(UTF8String(SNames[name]), ResultSet.GetUTF8String(p_name_Index));
+        CheckEquals(RawByteString(SNames[name]), ResultSet.GetRawByteString(p_name_Index));
+        CheckEquals(ZWideString(SNames[name]), ResultSet.GetUnicodeString(p_name_Index));
+        CheckEquals(PAnsiChar(AnsiString(SNames[name])), ResultSet.GetPAnsiChar(p_name_Index));
+        CheckEquals(PAnsiChar(RawByteString(SNames[name])), ResultSet.GetPAnsiChar(p_name_Index, Len), @Len);
+        CheckEquals(PChar(SNames[name]), ResultSet.GetPChar(p_name_Index));
+        CheckEquals(ZWideString(SNames[name]), ZWideString(ResultSet.GetPWideChar(p_name_Index)));
+        CheckEquals(ZWideString(SNames[name]), ZWideString(ResultSet.GetPWideChar(p_name_Index, Len)));
+      end;
     finally
       ResultSet.Close;
     end;
@@ -1168,7 +1334,6 @@ begin
     Statement.Close;
   end;
 end;
-{$WARNINGS ON}
 
 procedure TZGenericTestDbcResultSet.TestStringToSignedIntegerConversions;
 const
@@ -1196,10 +1361,9 @@ var
     Result := PStatement.ExecuteUpdatePrepared = 1;
   end;
 begin
-  Use_S_BIT := Not(StartsWith(Protocol, 'sqlite') or StartsWith(Protocol, 'ado') or
-    StartsWith(Protocol, 'mssql') or StartsWith(Protocol, 'sybase') or
-    StartsWith(Protocol, 'FreeTDS') or StartsWith(Protocol, 'ASA') or
-    StartsWith(Protocol, 'OleDB') or StartsWith(Protocol, 'odbc'));
+  Use_S_BIT := Not (
+    ProtocolType in [protSQLite, protADO, protMSSQL, protSyBase, protFreeTDS, protASA, protOleDB, protODBC]
+  );
   if Use_S_BIT then
     PStatement := Connection.PrepareStatement('insert into string_values(s_id,s_char,s_varchar,s_nchar,s_nvarchar,s_bit) values (?, ?, ?, ?, ?, ?)')
   else
@@ -1332,10 +1496,9 @@ var
 begin
   Info := TStringList.Create;
   Info.Add('preferprepared=True');
-  Use_S_BIT := Not(StartsWith(Protocol, 'sqlite') or StartsWith(Protocol, 'ado')
-    or StartsWith(Protocol, 'mssql') or StartsWith(Protocol, 'sybase') or
-    StartsWith(Protocol, 'FreeTDS') or StartsWith(Protocol, 'ASA') or
-    StartsWith(Protocol, 'OleDB') or StartsWith(Protocol, 'odbc'));
+  Use_S_BIT := Not (
+    ProtocolType in [protSQLite, protADO, protMSSQL, protSyBase, protFreeTDS, protASA, protOleDB, protODBC]
+  );
   if Use_S_BIT then
     PStatement := Connection.PrepareStatement('insert into string_values(s_id,s_char,s_varchar,s_nchar,s_nvarchar,s_bit) values (?, ?, ?, ?, ?, ?)')
   else
@@ -1444,7 +1607,328 @@ begin
   end;
 end;
 
+{ TZGenericTestDbcArrayBindings }
+
+const
+  hl_id_Index           = FirstDbcIndex;
+  stBooleanArray_Index  = FirstDbcIndex+1;
+  stByte_Index          = FirstDbcIndex+2;
+  stShort_Index         = FirstDbcIndex+3;
+  stInteger_Index       = FirstDbcIndex+4;
+  stLong_Index          = FirstDbcIndex+5;
+  stFloat_Index         = FirstDbcIndex+6;
+  stDouble_Index        = FirstDbcIndex+7;
+  stBigDecimal_Index    = FirstDbcIndex+8;
+  stString_Index        = FirstDbcIndex+9;
+  stUnicode_Index       = FirstDbcIndex+10;
+  stBytes_Index         = FirstDbcIndex+11;
+  stDate_Index          = FirstDbcIndex+12;
+  stTime_Index          = FirstDbcIndex+13;
+  stTimeStamp_Index     = FirstDbcIndex+14;
+  stGUID_Index          = FirstDbcIndex+15;
+  stAsciiStream_Index   = FirstDbcIndex+16;
+  stUnicodeStream_Index = FirstDbcIndex+17;
+  stBinaryStream_Index  = FirstDbcIndex+18;
+
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
+procedure TZGenericTestDbcArrayBindings.InternalTestArrayBinding(
+  PStatement: IZPreparedStatement; FirstID, ArrayLen, LastFieldIndex: Integer);
+var
+  I, J: Integer;
+
+  procedure PrepareSomeData;
+  var I: Integer;
+  begin
+    SetLength(hl_idArray, ArrayLen);
+    SetLength(stBooleanArray, ArrayLen);
+    SetLength(stByteArray, ArrayLen);
+    SetLength(stShortArray, ArrayLen);
+    SetLength(stLongArray, ArrayLen);
+    SetLength(stIntegerArray, ArrayLen);
+    SetLength(stFloatArray, ArrayLen);
+    SetLength(stDoubleArray, ArrayLen);
+    SetLength(stBigDecimalArray, ArrayLen);
+    SetLength(stStringArray, ArrayLen);
+    SetLength(stUnicodeStringArray, ArrayLen);
+    SetLength(stBytesArray, ArrayLen);
+    SetLength(stDateArray, ArrayLen);
+    SetLength(stTimeArray, ArrayLen);
+    SetLength(stTimeStampArray, ArrayLen);
+    SetLength(stGUIDArray, ArrayLen);
+    SetLength(stAsciiStreamArray, ArrayLen);
+    SetLength(stUnicodeStreamArray, ArrayLen);
+    SetLength(stBinaryStreamArray, ArrayLen);
+    for i := 0 to ArrayLen-1 do
+    begin
+      hl_idArray[i] := FirstID+I;
+      stBooleanArray[i] := Boolean(Random(1));
+      stByteArray[i] := Random(255);
+      stShortArray[i] := I;
+      stLongArray[I] := I;
+      stIntegerArray[I] := I;
+      stFloatArray[i] := RandomFloat(-5000, 5000);
+      stDoubleArray[i] := RandomFloat(-5000, 5000);
+      stBigDecimalArray[i] := RandomFloat(-5000, 5000);
+      stStringArray[i] := RandomStr(Random(99)+1);
+      stUnicodeStringArray[i] := RandomStr(Random(254+1));
+      stBytesArray[i] := RandomBts(ArrayLen);
+      stDateArray[i] := Trunc(Now);
+      stTimeArray[i] := Frac(Now);
+      stTimeStampArray[i] := Now;
+      stGUIDArray[i] := RandomGUID;
+      stAsciiStreamArray[i].Len := Length(stStringArray[i]);
+      stAsciiStreamArray[i].P := Pointer(stStringArray[i]);
+      stAsciiStreamArray[i].CP := Connection.GetConSettings^.ClientCodePage^.CP; {safe we're passing ASCII7 only to the raws}
+      stUnicodeStreamArray[i] := RandomStr(MaxPerformanceLobSize);
+      stBinaryStreamArray[i] := TZAbstractBlob.Create;
+      (stBinaryStreamArray[i] as IZBlob).SetBytes(RandomBts(MaxPerformanceLobSize));
+    end;
+  end;
+begin
+  CheckNotNull(PStatement);
+  PrepareSomeData;
+  PStatement.SetDataArray(hl_id_Index, hl_idArray, stInteger);
+  if LastFieldIndex >= stBooleanArray_Index then
+    PStatement.SetDataArray(stBooleanArray_Index, stBooleanArray, stBoolean);
+  if LastFieldIndex >= stByte_Index then
+    PStatement.SetDataArray(stByte_Index, stByteArray, stByte);
+  if LastFieldIndex >= stShort_Index then
+    PStatement.SetDataArray(stShort_Index, stShortArray, stShort);
+  if LastFieldIndex >= stInteger_Index then
+    PStatement.SetDataArray(stInteger_Index, stIntegerArray, stInteger);
+  if LastFieldIndex >= stLong_Index then
+    PStatement.SetDataArray(stLong_Index, stLongArray, stLong);
+  if LastFieldIndex >= stFloat_Index then
+    PStatement.SetDataArray(stFloat_Index, stFloatArray, stFloat);
+  if LastFieldIndex >= stDouble_Index then
+    PStatement.SetDataArray(stDouble_Index, stDoubleArray, stDouble);
+  if LastFieldIndex >= stBigDecimal_Index then
+    PStatement.SetDataArray(stBigDecimal_Index, stBigDecimalArray, stBigDecimal);
+  if LastFieldIndex >= stString_Index then
+    PStatement.SetDataArray(stString_Index, stStringArray, stString, vtRawByteString);
+  if LastFieldIndex >= stUnicode_Index then
+    PStatement.SetDataArray(stUnicode_Index, stUnicodeStringArray, stUnicodeString, vtUnicodeString);
+  if LastFieldIndex >= stBytes_Index then
+    PStatement.SetDataArray(stBytes_Index, stBytesArray, stBytes);
+  if LastFieldIndex >= stDate_Index then
+    PStatement.SetDataArray(stDate_Index, stDateArray, stDate);
+  if LastFieldIndex >= stTime_Index then
+    PStatement.SetDataArray(stTime_Index, stTimeArray, stTime);
+  if LastFieldIndex >= stTimeStamp_Index then
+    PStatement.SetDataArray(stTimeStamp_Index, stTimeStampArray, stTimeStamp);
+  if LastFieldIndex >= stGUID_Index then
+    PStatement.SetDataArray(stGUID_Index, stGUIDArray, stGUID);
+  if LastFieldIndex >= stAsciiStream_Index then
+    PStatement.SetDataArray(stAsciiStream_Index, stAsciiStreamArray, stString, vtCharRec);
+  if LastFieldIndex >= stUnicodeStream_Index then
+    PStatement.SetDataArray(stUnicodeStream_Index, stUnicodeStreamArray, stString, vtUTF8String);
+  if LastFieldIndex >= stBinaryStream_Index then
+    PStatement.SetDataArray(stBinaryStream_Index, stBinaryStreamArray, stBinaryStream);
+
+  for i := stBooleanArray_Index to LastFieldIndex do begin
+    Randomize;
+    case TZSQLType(Random(14)+1) of
+      stBoolean:
+        begin
+          SetLength(stBooleanNullArray, Length(stBooleanNullArray) +1);
+          SetLength(stBooleanNullArray[High(stBooleanNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stBooleanNullArray[High(stBooleanNullArray)][J] := Boolean(Random(1));
+          PStatement.SetNullArray(I, stBoolean, stBooleanNullArray[High(stBooleanNullArray)]);
+        end;
+      stByte:
+        begin
+          SetLength(stByteNullArray, Length(stByteNullArray)+1);
+          SetLength(stByteNullArray[High(stByteNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stByteNullArray[High(stByteNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stByte, stByteNullArray[High(stByteNullArray)]);
+        end;
+      stShort:
+        begin
+          SetLength(stShortNullArray, Length(stShortNullArray)+1);
+          SetLength(stShortNullArray[High(stShortNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stShortNullArray[High(stShortNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stShort, stShortNullArray[High(stShortNullArray)]);
+        end;
+      stWord:
+        begin
+          SetLength(stWordNullArray, Length(stWordNullArray)+1);
+          SetLength(stWordNullArray[High(stWordNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stWordNullArray[High(stWordNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stWord, stWordNullArray[High(stWordNullArray)]);
+        end;
+      stSmall:
+        begin
+          SetLength(stSmallNullArray, Length(stSmallNullArray)+1);
+          SetLength(stSmallNullArray[High(stSmallNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stSmallNullArray[High(stSmallNullArray)][J] := -Random(2);
+          PStatement.SetNullArray(I, stSmall, stSmallNullArray[High(stSmallNullArray)]);
+        end;
+      stLongWord:
+        begin
+          SetLength(stLongWordNullArray, Length(stLongWordNullArray)+1);
+          SetLength(stLongWordNullArray[High(stLongWordNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stLongWordNullArray[High(stLongWordNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stLongWord, stLongWordNullArray[High(stLongWordNullArray)]);
+        end;
+      stInteger:
+        begin
+          SetLength(stIntegerNullArray, Length(stIntegerNullArray)+1);
+          SetLength(stIntegerNullArray[High(stIntegerNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stIntegerNullArray[High(stIntegerNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stInteger, stIntegerNullArray[High(stIntegerNullArray)]);
+        end;
+      stULong:
+        begin
+          SetLength(stULongNullArray, Length(stULongNullArray)+1);
+          SetLength(stULongNullArray[High(stULongNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stULongNullArray[High(stULongNullArray)][J] := Random(2);
+          PStatement.SetNullArray(I, stULong, stULongNullArray[High(stULongNullArray)]);
+        end;
+      stLong:
+        begin
+          SetLength(stLongNullArray, Length(stLongNullArray) +1);
+          SetLength(stLongNullArray[High(stLongNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stLongNullArray[High(stLongNullArray)][J] := Random(2)-1;
+          PStatement.SetNullArray(I, stLong, stLongNullArray[High(stLongNullArray)]);
+        end;
+      stFloat:
+        begin
+          SetLength(stFloatNullArray, Length(stFloatNullArray)+1);
+          SetLength(stFloatNullArray[High(stFloatNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stFloatNullArray[High(stFloatNullArray)][J] := Random(2)-1;
+          PStatement.SetNullArray(I, stFloat, stFloatNullArray[High(stFloatNullArray)]);
+        end;
+      stDouble:
+        begin
+          SetLength(stDoubleNullArray, Length(stDoubleNullArray)+1);
+          SetLength(stDoubleNullArray[high(stDoubleNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stDoubleNullArray[high(stDoubleNullArray)][J] := Random(2)-1;
+          PStatement.SetNullArray(I, stDouble, stDoubleNullArray[high(stDoubleNullArray)]);
+        end;
+      stCurrency:
+        begin
+          SetLength(stCurrencyNullArray, Length(stCurrencyNullArray)+1);
+          SetLength(stCurrencyNullArray[High(stCurrencyNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stCurrencyNullArray[High(stCurrencyNullArray)][J] := Random(2)-1;
+          PStatement.SetNullArray(I, stCurrency, stCurrencyNullArray[High(stCurrencyNullArray)]);
+        end;
+      stBigDecimal:
+        begin
+          SetLength(stBigDecimalNullArray, Length(stBigDecimalNullArray)+1);
+          SetLength(stBigDecimalNullArray[High(stBigDecimalNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            stBigDecimalNullArray[High(stBigDecimalNullArray)][J] := Random(2)-1;
+          PStatement.SetNullArray(I, stBigDecimal, stBigDecimalNullArray[High(stBigDecimalNullArray)]);
+        end;
+      stUnicodeString:
+        begin
+          SetLength(stUnicodeStringNullArray, Length(stUnicodeStringNullArray)+1);
+          SetLength(stUnicodeStringNullArray[High(stUnicodeStringNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            if Random(2) = 0 then
+              stUnicodeStringNullArray[High(stUnicodeStringNullArray)][J] := 'FALSE'
+            else
+              stUnicodeStringNullArray[High(stUnicodeStringNullArray)][J] := 'TRUE';
+          PStatement.SetNullArray(I, stUnicodeString, stUnicodeStringNullArray[High(stUnicodeStringNullArray)], vtUnicodeString);
+        end;
+      else
+        begin
+          SetLength(stStringNullArray, Length(stStringNullArray)+1);
+          SetLength(stStringNullArray[High(stStringNullArray)], ArrayLen);
+          for J := 0 to ArrayLen-1 do
+            if Random(2) = 0 then
+              stStringNullArray[High(stStringNullArray)][J] := 'FALSE'
+            else
+              stStringNullArray[High(stStringNullArray)][J] := 'TRUE';
+          PStatement.SetNullArray(I, stString, stStringNullArray[High(stStringNullArray)], vtRawByteString);
+        end;
+    end;
+  end;
+  PStatement.ExecuteUpdatePrepared;
+end;
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
+
+const
+  LastFieldIndices: array[0..2] of Integer = (stBigDecimal_Index, stAsciiStream_Index, stBinaryStream_Index);
+  HighLoadFields: array[hl_id_Index..stBinaryStream_Index] of String = (
+    'hl_id', 'stBoolean', 'stByte', 'stShort', 'stInteger', 'stLong', ''+
+      'stFloat', 'stDouble', 'stBigDecimal', 'stString', 'stUnicodeString', 'stBytes',
+      'stDate', 'stTime', 'stTimestamp', 'stGUID', 'stAsciiStream', 'stUnicodeStream',
+      'stBinaryStream');
+procedure TZGenericTestDbcArrayBindings.TestArrayBindings;
+var
+  PStatement: IZPreparedStatement;
+  I, j: Integer;
+  SQL: String;
+begin
+  if Connection.GetMetadata.GetDatabaseInfo.SupportsArrayBindings then begin
+    for i := low(LastFieldIndices) to high(LastFieldIndices) do begin
+      Connection.CreateStatement.ExecuteUpdate('delete from high_load');
+      SQL := 'insert into high_load(';
+      for j := hl_id_Index to LastFieldIndices[i] do
+        SQL := SQL+HighLoadFields[j]+',';
+      SQL[Length(SQL)] := ')';
+      SQL := SQL + ' values ('+DupeString('?,', LastFieldIndices[i]{$IFDEF GENERIC_INDEX}+1{$ENDIF});
+      SQL[Length(SQL)] := ')';
+      PStatement := Connection.PrepareStatement(SQL);
+      CheckNotNull(PStatement);
+      InternalTestArrayBinding(PStatement, 0, 50, LastFieldIndices[i]);
+      InternalTestArrayBinding(PStatement, 50, 20, LastFieldIndices[i]);
+      InternalTestArrayBinding(PStatement, 70, 10, LastFieldIndices[i]);
+      PStatement.ClearParameters;
+      PStatement.SetInt(hl_id_Index, 81);
+      PStatement.SetBoolean(stBooleanArray_Index, stBooleanArray[Random(9)]);
+      PStatement.SetByte(stByte_Index, stByteArray[Random(9)]);
+      PStatement.SetShort(stShort_Index, stShortArray[Random(9)]);
+      PStatement.SetInt(stInteger_Index, stIntegerArray[Random(9)]);
+      PStatement.SetLong(stLong_Index, stLongArray[Random(9)]);
+      PStatement.SetFloat(stFloat_Index, stFloatArray[Random(9)]);
+      PStatement.SetDouble(stDouble_Index, stDoubleArray[Random(9)]);
+      PStatement.SetBigDecimal(stBigDecimal_Index, stBigDecimalArray[Random(9)]);
+      if LastFieldIndices[i] > stBigDecimal_Index then begin
+        PStatement.SetRawByteString(stString_Index, stStringArray[Random(9)]);
+        PStatement.SetUnicodeString(stUnicode_Index, stUnicodeStringArray[Random(9)]);
+        PStatement.SetBytes(stBytes_Index, stBytesArray[Random(9)]);
+        if LastFieldIndices[i] > stBytes_Index then begin
+          PStatement.SetDate(stDate_Index, stDateArray[Random(9)]);
+          PStatement.SetTime(stTime_Index, stTimeArray[Random(9)]);
+          PStatement.SetTimestamp(stTimeStamp_Index, stTimeStampArray[Random(9)]);
+          if LastFieldIndices[i] > stTimeStamp_Index then begin
+            PStatement.SetNull(stGUID_Index, stString);
+            PStatement.SetCharRec(stAsciiStream_Index, stAsciiStreamArray[Random(9)]);
+            if LastFieldIndices[i] > stAsciiStream_Index then begin
+              PStatement.SetUTF8String(stUnicodeStream_Index, stUnicodeStreamArray[Random(9)]);
+              PStatement.SetBlob(stBinaryStream_Index, stBinaryStream, stBinaryStreamArray[Random(9)] as IZBlob);
+            end;
+          end;
+        end;
+      end;
+      PStatement.ExecuteUpdatePrepared;
+      PStatement.ClearParameters;
+      with PStatement.ExecuteQuery('select Count(*) from high_load') do
+      begin
+        Next;
+        CheckEquals(81, GetInt(FirstDbcIndex), 'Blokinsertiation Count');
+      end;
+    end;
+  end else
+    BlankCheck;
+end;
+
 initialization
   RegisterTest('dbc',TZGenericTestDbcResultSet.Suite);
+  RegisterTest('dbc',TZGenericTestDbcArrayBindings.Suite);
 end.
 

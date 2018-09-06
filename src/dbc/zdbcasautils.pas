@@ -108,7 +108,7 @@ type
     procedure UpdateDouble(const Index: Integer; Value: Double);
     procedure UpdateBigDecimal(const Index: Integer; Value: Extended);
     procedure UpdatePRaw(const Index: Integer; Value: PAnsiChar; Len: NativeUInt);
-    procedure UpdateBytes(const Index: Integer; Value: TBytes);
+    procedure UpdateBytes(const Index: Integer; const Value: TBytes);
     procedure UpdateDate(const Index: Integer; Value: TDateTime);
     procedure UpdateTime(const Index: Integer; Value: TDateTime);
     procedure UpdateTimestamp(const Index: Integer; Value: TDateTime);
@@ -117,8 +117,8 @@ type
     function IsNull(const Index: Integer): Boolean;
     function IsAssigned(const Index: Integer): Boolean;
 
-    procedure ReadBlobToMem(const Index: Word; var Buffer: Pointer; var Length: NativeUInt; const Binary: Boolean = True);
-    procedure ReadBlobToString(const Index: Word; var str: RawByteString);
+    procedure ReadBlobToMem(const Index: Word; out Buffer: Pointer; out Length: NativeUInt; const Binary: Boolean = True);
+    procedure ReadBlobToString(const Index: Word; out str: RawByteString);
   end;
 
   { Base class contain core functions to work with sqlda structure
@@ -127,7 +127,7 @@ type
   private
     FConSettings: PZConSettings;
     FSQLDA: PASASQLDA;
-    FPlainDriver: IZASAPlainDriver;
+    FPlainDriver: TZASAPlainDriver;
     FHandle: PZASASQLCA;
     FCursorName: PAnsiChar;
     procedure CreateException(const  Msg: string);
@@ -141,7 +141,7 @@ type
     FDeclType: array of TZASADECLTYPE;
     procedure ReadBlob(const Index: Word; var Buffer: Pointer; Length: LongWord);
   public
-    constructor Create(const PlainDriver: IZASAPlainDriver; Handle: PZASASQLCA;
+    constructor Create(const PlainDriver: TZASAPlainDriver; Handle: PZASASQLCA;
       CursorName: PAnsiChar; ConSettings: PZConSettings; NumVars: Word = StdVars);
     destructor Destroy; override;
 
@@ -174,7 +174,7 @@ type
     procedure UpdateDouble(const Index: Integer; Value: Double);
     procedure UpdateBigDecimal(const Index: Integer; Value: Extended);
     procedure UpdatePRaw(const Index: Integer; Value: PAnsiChar; Len: NativeUInt);
-    procedure UpdateBytes(const Index: Integer; Value: TBytes);
+    procedure UpdateBytes(const Index: Integer; const Value: TBytes);
     procedure UpdateDate(const Index: Integer; Value: TDateTime);
     procedure UpdateTime(const Index: Integer; Value: TDateTime);
     procedure UpdateTimestamp(const Index: Integer; Value: TDateTime);
@@ -184,8 +184,8 @@ type
     function IsNull(const Index: Integer): Boolean;
     function IsAssigned(const Index: Integer): Boolean;
 
-    procedure ReadBlobToMem(const Index: Word; var Buffer: Pointer; var Length: NativeUInt; const Binary: Boolean = True);
-    procedure ReadBlobToString(const Index: Word; var str: RawByteString);
+    procedure ReadBlobToMem(const Index: Word; out Buffer: Pointer; out Length: NativeUInt; const Binary: Boolean = True);
+    procedure ReadBlobToString(const Index: Word; out str: RawByteString);
   end;
 
 {**
@@ -215,7 +215,7 @@ function ASADateTimeToSQLTimeStamp( ASADT: PZASASQLDateTime): TSQLTimeStamp;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckASAError(const PlainDriver: IZASAPlainDriver;
+procedure CheckASAError(const PlainDriver: TZASAPlainDriver;
   const Handle: PZASASQLCA; const LogCategory: TZLoggingCategory;
   const ConSettings: PZConSettings; const LogMessage: RawByteString = '';
   const SupressExceptionID: Integer = 0);
@@ -224,7 +224,7 @@ function GetCachedResultSet(const SQL: string;
   const Statement: IZStatement; const NativeResultSet: IZResultSet): IZResultSet;
 
 procedure DescribeCursor(const FASAConnection: IZASAConnection; const FSQLData: IZASASQLDA;
-  const Cursor: AnsiString; const SQL: RawByteString);
+  const Cursor: {$IFNDEF NO_ANSISTRING}AnsiString{$ELSE}RawByteString{$ENDIF}; const SQL: RawByteString);
 
 procedure ASAPrepare(const FASAConnection: IZASAConnection; const FSQLData, FParamsSQLData: IZASASQLDA;
    const SQL: RawByteString; StmtNum: PSmallInt; var FPrepared, FMoreResults: Boolean);
@@ -239,7 +239,7 @@ function RandomString( Len: integer): string;
 implementation
 
 uses Variants, Math, {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
-  ZFastCode, ZMessages, ZDbcCachedResultSet, ZEncoding, ZDbcUtils;
+  ZFastCode, ZMessages, ZDbcCachedResultSet, ZEncoding, ZDbcUtils, ZClasses;
 
 { TZASASQLDA }
 
@@ -283,7 +283,7 @@ begin
       PZASABlobStruct( sqlData).array_len := Len;
       PZASABlobStruct( sqlData).stored_len := 0;
       PZASABlobStruct( sqlData).untrunc_len := 0;
-      PZASABlobStruct( sqlData).arr[0] := #0;
+      PZASABlobStruct( sqlData).arr[0] := AnsiChar(#0);
       Inc( Len, SizeOf( TZASABlobStruct));
     end
     else
@@ -315,7 +315,7 @@ begin
   SetFieldType(FSQLDA, Index, ASAType, Len, SetDeclType);
 end;
 
-constructor TZASASQLDA.Create(const PlainDriver: IZASAPlainDriver; Handle: PZASASQLCA;
+constructor TZASASQLDA.Create(const PlainDriver: TZASAPlainDriver; Handle: PZASASQLCA;
    CursorName: PAnsiChar; ConSettings: PZConSettings; NumVars: Word = StdVars);
 begin
   FPlainDriver := PlainDriver;
@@ -339,7 +339,7 @@ end;
 procedure TZASASQLDA.AllocateSQLDA( NumVars: Word);
 begin
   FreeSQLDA;
-  FSQLDA := FPlainDriver.db_alloc_sqlda( NumVars);
+  FSQLDA := FPlainDriver.alloc_sqlda( NumVars);
   if not Assigned( FSQLDA) then CreateException( 'Not enough memory for SQLDA');
   SetLength(FDeclType, FSQLDA.sqln);
 end;
@@ -431,7 +431,7 @@ begin
         FSQLDA.sqlVar[i].sqlData := nil;
       end;
     end;
-    FPlainDriver.db_free_sqlda( FSQLDA);
+    FPlainDriver.free_sqlda( FSQLDA);
     FSQLDA := nil;
   end;
   SetLength(FDeclType, 0);
@@ -506,12 +506,17 @@ end;
    @return the index field
 }
 function TZASASQLDA.GetFieldIndex(const Name: String): Word;
+var FieldName: String;
+  P1, P2: PChar;
 begin
-  for Result := 0 to FSQLDA.sqld - 1 do
-    if FSQLDA.sqlvar[Result].sqlname.length = Length(name) then
-      if {$IFDEF WITH_STRLICOMP_DEPRECATED}AnsiStrings.{$ENDIF}StrLIComp(@FSQLDA.sqlvar[Result].sqlname.data, PAnsiChar(FConSettings^.ConvFuncs.ZStringToRaw(Name,
-            FConSettings^.CTRL_CP, FConSettings^.ClientCodePage^.CP)), Length(name)) = 0 then
-            Exit;
+  for Result := 0 to FSQLDA.sqld - 1 do begin
+    FieldName := GetFieldName(Result);
+    P1 := Pointer(Name);
+    P2 := Pointer(FieldName);
+    if Length(FieldName) = Length(name) then
+      if StrLIComp(P1, P2, Length(name)) = 0 then
+        Exit;
+  end;
   CreateException( Format( SFieldNotFound1, [name]));
   Result := 0; // satisfy compiler
 end;
@@ -783,9 +788,9 @@ begin
     if Len < MinBLOBSize then
     begin
       SetFieldType( Index, DT_VARCHAR or 1, MinBLOBSize - 1);
-      PZASASQLSTRING( sqlData).length := {%H-}Min(Len, sqllen-3);
+      PZASASQLSTRING( sqlData).length := Min(Len, sqllen-3);
       {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Value^, PZASASQLSTRING( sqlData).data[0], PZASASQLSTRING( sqlData).length);
-      (PAnsiChar(@PZASASQLSTRING( sqlData).data[0])+PZASASQLSTRING( sqlData).length)^ := #0;
+      AnsiChar((PAnsiChar(@PZASASQLSTRING( sqlData).data[0])+PZASASQLSTRING( sqlData).length)^) := AnsiChar(#0);
     end
     else
     begin
@@ -805,7 +810,7 @@ end;
    @param Index the target parameter index
    @param Value the source value
 }
-procedure TZASASQLDA.UpdateBytes(const Index: Integer; Value: TBytes);
+procedure TZASASQLDA.UpdateBytes(const Index: Integer; const Value: TBytes);
 var
   BlobSize: Integer;
 begin
@@ -816,12 +821,12 @@ begin
     begin
       SetFieldType( Index, DT_BINARY or 1, MinBLOBSize - 1);
       PZASASQLSTRING( sqlData).length := BlobSize;
-      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( Value[0], PZASASQLSTRING( sqlData).data[0], BlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( Pointer(Value)^, PZASASQLSTRING( sqlData).data[0], BlobSize);
     end
     else
     begin
       SetFieldType( Index, DT_LONGBINARY or 1, BlobSize);
-      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( Value[0], PZASABlobStruct( sqlData).arr[0], BlobSize);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( Pointer(Value)^, PZASABlobStruct( sqlData).arr[0], BlobSize);
       PZASABlobStruct( sqlData).stored_len := BlobSize;
       PZASABlobStruct( sqlData).untrunc_len := BlobSize;
     end;
@@ -975,11 +980,11 @@ begin
         'Blob Record is not correctly initialized');
       if PZASABlobStruct( sqlData).array_len <> Length then
         CreateException( 'Could''nt complete BLOB-Read');
-      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( PZASABlobStruct( sqlData).arr[0], PAnsiChar( Buffer)[0], PZASABlobStruct( sqlData).array_len);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move( PZASABlobStruct( sqlData).arr[0], Buffer, PZASABlobStruct( sqlData).array_len);
     end
     else
     begin
-      TempSQLDA := FPlainDriver.db_alloc_sqlda( 1);
+      TempSQLDA := FPlainDriver.alloc_sqlda( 1);
       if not Assigned( TempSQLDA) then
         CreateException( 'Not enough memory for SQLDA');
       try
@@ -996,7 +1001,7 @@ begin
               sqlType := DT_FIXCHAR;
           end;
           sqlname.length := 0;
-          sqlname.data[0] := #0;
+          sqlname.data[0] := AnsiChar(#0);
           TempSQLDA.sqld := TempSQLDA.sqln;
 
           Offs := 0;
@@ -1004,7 +1009,7 @@ begin
 
           while True do
           begin
-            FPlainDriver.db_get_data(FHandle, FCursorName, Index + 1, Offs, TempSQLDA);
+            FPlainDriver.dbpp_get_data(FHandle, FCursorName, Index + 1, Offs, TempSQLDA, 0);
             CheckASAError( FPlainDriver, FHandle, lcOther, FConSettings);
             if ( sqlind^ < 0 ) then
               break;
@@ -1019,12 +1024,12 @@ begin
           if Rd <> Length then
             CreateException( 'Could''nt complete BLOB-Read');
           FreeMem(sqlData);
-          FPlainDriver.db_free_sqlda( TempSQLDA);
+          FPlainDriver.free_sqlda( TempSQLDA);
           TempSQLDA := nil;
         end;
       except
         if Assigned( TempSQLDA) then
-          FPlainDriver.db_free_sqlda( TempSQLDA);
+          FPlainDriver.free_sqlda( TempSQLDA);
         raise;
       end;
     end;
@@ -1036,8 +1041,8 @@ end;
    @param Index an filed index
    @param Str destination string
 }
-procedure TZASASQLDA.ReadBlobToMem(const Index: Word; var Buffer: Pointer;
-  var Length: NativeUInt; const Binary: Boolean = True);
+procedure TZASASQLDA.ReadBlobToMem(const Index: Word; out Buffer: Pointer;
+  out Length: NativeUInt; const Binary: Boolean);
 begin
   CheckRange(Index);
   with FSQLDA.sqlvar[Index] do
@@ -1067,7 +1072,7 @@ end;
    @param Index an filed index
    @param Str destination string
 }
-procedure TZASASQLDA.ReadBlobToString(const Index: Word; var Str: RawByteString);
+procedure TZASASQLDA.ReadBlobToString(const Index: Word; out Str: RawByteString);
 var Buffer: Pointer;
 begin
   CheckRange(Index);
@@ -1283,17 +1288,19 @@ end;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckASAError(const PlainDriver: IZASAPlainDriver;
+procedure CheckASAError(const PlainDriver: TZASAPlainDriver;
   const Handle: PZASASQLCA; const LogCategory: TZLoggingCategory;
   const ConSettings: PZConSettings; const LogMessage: RawByteString = '';
   const SupressExceptionID: Integer = 0);
 var
   ErrorBuf: array[0..1024] of AnsiChar;
   ErrorMessage: RawByteString;
+  P: PAnsiChar;
 begin
   if Handle.SqlCode < SQLE_NOERROR then
   begin
-    ErrorMessage := PlainDriver.sqlError_Message( Handle, ErrorBuf, SizeOf( ErrorBuf));
+    P := PlainDriver.sqlError_Message( Handle, @ErrorBuf[0], SizeOf( ErrorBuf));
+    ZSetString(P, StrLen(P), ErrorMessage);
     //SyntaxError Position in SQLCount
     if not (SupressExceptionID = Handle.SqlCode ) then
     begin
@@ -1333,19 +1340,19 @@ begin
 end;
 
 procedure DescribeCursor(const FASAConnection: IZASAConnection; const FSQLData: IZASASQLDA;
-  const Cursor: AnsiString; const SQL: RawByteString);
+  const Cursor: {$IFNDEF NO_ANSISTRING}AnsiString{$ELSE}RawByteString{$ENDIF}; const SQL: RawByteString);
 begin
   //FSQLData.AllocateSQLDA( StdVars);
   with FASAConnection do
   begin
-    GetPlainDriver.db_describe_cursor(GetDBHandle, Pointer(Cursor), FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
+    GetPlainDriver.dbpp_describe_cursor(GetDBHandle, Pointer(Cursor), FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
     ZDbcASAUtils.CheckASAError( GetPlainDriver, GetDBHandle, lcExecute, FASAConnection.GetConSettings, SQL);
     if FSQLData.GetData^.sqld <= 0 then
       raise EZSQLException.Create( SCanNotRetrieveResultSetData)
     else if ( FSQLData.GetData^.sqld > FSQLData.GetData^.sqln) then
     begin
       FSQLData.AllocateSQLDA( FSQLData.GetData^.sqld);
-      GetPlainDriver.db_describe_cursor(GetDBHandle, PAnsiChar(Cursor), FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
+      GetPlainDriver.dbpp_describe_cursor(GetDBHandle, PAnsiChar(Cursor), FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
        ZDbcASAUtils.CheckASAError(GetPlainDriver, GetDBHandle, lcExecute, FASAConnection.GetConSettings, SQL);
     end;
     FSQLData.InitFields;
@@ -1363,14 +1370,19 @@ begin
       FSQLData.AllocateSQLDA( StdVars);
       if StmtNum^ <> 0 then
       begin
-        GetPlainDriver.db_dropstmt( GetDBHandle, nil, nil, StmtNum);
+        GetPlainDriver.dbpp_dropstmt( GetDBHandle, nil, nil, StmtNum);
         StmtNum^ := 0;
       end;
     end;
     try
-      GetPlainDriver.db_prepare_describe( GetDBHandle, nil, StmtNum, Pointer(SQL),
-        FParamsSQLData.GetData, SQL_PREPARE_DESCRIBE_STMTNUM +
-          SQL_PREPARE_DESCRIBE_INPUT + SQL_PREPARE_DESCRIBE_VARRESULT, 0);
+      if Assigned(GetPlainDriver.dbpp_prepare_describe_12) then
+        GetPlainDriver.dbpp_prepare_describe_12(GetDBHandle, nil, nil, StmtNum, Pointer(SQL),
+          nil, FParamsSQLData.GetData, SQL_PREPARE_DESCRIBE_STMTNUM +
+            SQL_PREPARE_DESCRIBE_INPUT + SQL_PREPARE_DESCRIBE_VARRESULT, 0, 0)
+      else
+        GetPlainDriver.dbpp_prepare_describe( GetDBHandle, nil, nil, StmtNum, Pointer(SQL),
+          nil, FParamsSQLData.GetData, SQL_PREPARE_DESCRIBE_STMTNUM +
+            SQL_PREPARE_DESCRIBE_INPUT + SQL_PREPARE_DESCRIBE_VARRESULT, 0);
       ZDbcASAUtils.CheckASAError(GetPlainDriver, GetDBHandle, lcExecute, GetConSettings, SQL);
 
       FMoreResults := GetDBHandle.sqlerrd[2] = 0;
@@ -1378,20 +1390,20 @@ begin
       if FParamsSQLData.GetData^.sqld > FParamsSQLData.GetData^.sqln then
       begin
         FParamsSQLData.AllocateSQLDA( FParamsSQLData.GetData^.sqld);
-        GetPlainDriver.db_describe( GetDBHandle, nil, StmtNum,
+        GetPlainDriver.dbpp_describe( GetDBHandle, nil, nil, StmtNum,
           FParamsSQLData.GetData, SQL_DESCRIBE_INPUT);
         ZDbcASAUtils.CheckASAError( GetPlainDriver, GetDBHandle, lcExecute, GetConSettings, SQL);
       end;
 
       if not FMoreResults then
       begin
-        GetPlainDriver.db_describe( GetDBHandle, nil, StmtNum,
+        GetPlainDriver.dbpp_describe( GetDBHandle, nil, nil, StmtNum,
           FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
         ZDbcASAUtils.CheckASAError( GetPlainDriver, GetDBHandle, lcExecute, GetConSettings, SQL);
         if FSQLData.GetData^.sqld > FSQLData.GetData^.sqln then
         begin
           FSQLData.AllocateSQLDA( FSQLData.GetData^.sqld);
-          GetPlainDriver.db_describe( GetDBHandle, nil, StmtNum,
+          GetPlainDriver.dbpp_describe( GetDBHandle, nil, nil, StmtNum,
             FSQLData.GetData, SQL_DESCRIBE_OUTPUT);
           ZDbcASAUtils.CheckASAError( GetPlainDriver, GetDBHandle, lcExecute, GetConSettings, SQL);
         end;
@@ -1406,7 +1418,7 @@ begin
       on E: Exception do
       begin
         if StmtNum^ <> 0 then
-          GetPlainDriver.db_dropstmt( GetDBHandle, nil, nil, StmtNum);
+          GetPlainDriver.dbpp_dropstmt( GetDBHandle, nil, nil, StmtNum);
         raise;
       end;
     end;
@@ -1421,6 +1433,9 @@ var
   TempBlob: IZBlob;
   TempStream: TStream;
   CharRec: TZCharRec;
+  {$IFDEF NO_ANSISTRING}
+  Raw: RawByteString;
+  {$ENDIF}
 begin
   if InParamCount <> ParamSqlData.GetFieldCount then
     raise EZSQLException.Create( SInvalidInputParameterCount);
@@ -1480,8 +1495,16 @@ begin
                 if TempBlob.IsClob then
                   TempStream := TempBlob.GetRawByteStream
                 else
+                {$IFDEF NO_ANSISTRING}
+                begin
+                  Raw := GetValidatedAnsiStringFromBuffer(
+                    TempBlob.GetBuffer, TempBlob.Length, ConSettings);
+                  TempStream := StreamFromData(Pointer(Raw), Length(Raw){$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}-1{$ENDIF});
+                end
+                {$ELSE}
                   TempStream := TStringStream.Create(GetValidatedAnsiStringFromBuffer(
                     TempBlob.GetBuffer, TempBlob.Length, ConSettings))
+                {$ENDIF}
               else
                 TempStream := TempBlob.GetStream;
               if Assigned(TempStream) then

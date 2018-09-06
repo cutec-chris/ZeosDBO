@@ -64,6 +64,10 @@ type
   {$UNDEF WITH_UNICODEFROMLOCALECHARS}
   {** Implements a test case for Utilities. }
   TZTestSysUtilsCase = class(TZGenericTestCase)
+  private
+    FQuote: string;
+    FSrc: string;
+    procedure RunDequotedStr;
   published
     procedure TestBufferToStr;
     procedure TestFirstDelimiter;
@@ -74,7 +78,13 @@ type
     procedure TestStrToBoolEx;
     procedure TestObjectComparison;
     procedure TestReplaceChar;
+    procedure TestRemoveChar;
+    procedure TestAppendSepString;
+    procedure TestBreakString;
     procedure TestMatch;
+    procedure TestQuotedStr;
+    procedure TestQuotedStr2;
+    procedure TestDequotedStr;
     procedure TestRawSQLDateToDateTime;
     procedure TestRawSQLTimeToDateTime;
     procedure TestRawSQLTimeStampToDateTime;
@@ -123,6 +133,19 @@ type
 implementation
 
 uses ZEncoding {$IFDEF BENCHMARK},ZFastCode, Types, Classes{$IF defined(MSWINDOWS) and not defined(WITH_UNICODEFROMLOCALECHARS)}, Windows{$IFEND}{$ENDIF};
+
+{$IFDEF FPC}{$IFNDEF DEFINE FPC3_0UP}
+{These functions help FPC 2.6 to decide wether to call the PChar or PWideChar version of these functions later on}
+function SQLStrToFloatDef(Value: RawByteString; const Def: Extended; Len: Integer = 0): Extended; overload;
+begin
+  Result := SQLStrToFloatDef(PChar(Value), Def, Len);
+end;
+
+function SQLStrToFloatDef(Value: ZWideString; const Def: Extended; Len: Integer = 0): Extended; overload;
+begin
+  Result := SQLStrToFloatDef(PWideChar(Value), Def, Len);
+end;
+{$ENDIF}{$ENDIF}
 
 { TZTestSysUtilsCase }
 
@@ -244,6 +267,73 @@ begin
 end;
 
 {**
+  Runs a test for RemoveChar function.
+}
+procedure TZTestSysUtilsCase.TestRemoveChar;
+begin
+  CheckEquals('123456', RemoveChar('.', '.123.456.'));
+  CheckEquals('123456', RemoveChar('.', '123456'));
+  CheckEquals('', RemoveChar('.', ''));
+  CheckEquals('', RemoveChar('.', '...'));
+end;
+
+{**
+  Runs a test for AppendSepString function.
+}
+procedure TZTestSysUtilsCase.TestAppendSepString;
+var
+  Str: string;
+begin
+  Str := '';
+  AppendSepString(Str, 'foo', ';');
+  CheckEquals(Str, 'foo');
+  AppendSepString(Str, 'bar', ';');
+  CheckEquals(Str, 'foo;bar');
+  AppendSepString(Str, '', ';');
+  CheckEquals(Str, 'foo;bar');
+end;
+
+
+{**
+  Runs a test for BreakString function.
+}
+procedure TZTestSysUtilsCase.TestBreakString;
+
+var
+  Delim, S, S1: string;
+
+  procedure CheckBreakString(const Str, ExpLeft, ExpRight: string);
+  var
+    Left, Right: string;
+  begin
+    BreakString(Str, Delim, Left, Right);
+    CheckEquals(ExpLeft, Left);
+    CheckEquals(ExpRight, Right);
+  end;
+
+begin
+  Delim := '=';
+  CheckBreakString('', '', '');
+  CheckBreakString(Delim, '', '');
+  CheckBreakString('aa', 'aa', '');
+  CheckBreakString('aa'+Delim, 'aa', '');
+  CheckBreakString('aa'+Delim+'bb', 'aa', 'bb');
+  CheckBreakString('aa'+Delim+'bb'+Delim, 'aa', 'bb'+Delim);
+  CheckBreakString('aa'+Delim+Delim+'bb', 'aa', Delim+'bb');
+
+  Delim := '==';
+  CheckBreakString('aa'+Delim+'bb', 'aa', 'bb');
+
+  S := 'aa'+Delim+'bb';
+  BreakString(S, Delim, S1, S);
+  CheckEquals('aa', S1);
+  CheckEquals('bb', S);
+  BreakString(S, Delim, S1, S);
+  CheckEquals('bb', S1);
+  CheckEquals('', S);
+end;
+
+{**
   Runs a test for StrToFloatDef function.
 }
 procedure TZTestSysUtilsCase.TestSqlStrToFloatDef;
@@ -351,6 +441,115 @@ begin
   CheckEquals(True, IsMatch('*qwe*', 'qwe'));
   CheckEquals(False, IsMatch('*qwe*', 'xyz'));
   CheckEquals(True, IsMatch('*qwe*', 'xyzqweabc'));
+end;
+
+procedure TZTestSysUtilsCase.TestQuotedStr;
+const
+  // Quote; Unquoted; Quoted
+  TestCases_SglQuote: array[0..2] of array[0..2] of string =
+  (
+    ('"', '', '""'),
+//    ('"', '"', '""""'),
+    ('"', 'no quote', '"no quote"'),
+    ('"', 'single "quote', '"single ""quote"')
+  );
+
+  TestCases_DblQuote: array[0..7] of array[0..2] of string =
+  (
+    ('""', '', '""'),
+    ('""', '"', '""""'),
+    ('""', 'no quote', '"no quote"'),
+    ('""', 'single "quote', '"single ""quote"'),
+    ('[]', '', '[]'),
+    ('[]', 'no quote', '[no quote]'),
+    ('[]', 'single [quote', '[single [[quote]'),
+    ('[]', 'double [1] quote', '[double [[1]] quote]')
+  );
+
+var i: Integer;
+begin
+  for i := Low(TestCases_SglQuote) to High(TestCases_SglQuote) do
+    CheckEquals(TestCases_SglQuote[i][2], SQLQuotedStr(TestCases_SglQuote[i][1], TestCases_SglQuote[i][0][1]));
+  for i := Low(TestCases_DblQuote) to High(TestCases_DblQuote) do
+    CheckEquals(TestCases_DblQuote[i][2], SQLQuotedStr(TestCases_DblQuote[i][1], TestCases_DblQuote[i][0][1], TestCases_DblQuote[i][0][2]));
+end;
+
+// in the sybase driver this leads to an exception
+// see SF#277
+procedure TZTestSysUtilsCase.TestQuotedStr2;
+var
+  TableName: String;
+  QuoteChar: Char;
+begin
+  QuoteChar := '''';
+  TableName := 'TABLE';
+  CheckEquals(QuotedStr(TableName), SQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+  //CheckEquals(QuotedStr(TableName), FailingSQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+  TableName := 'TA''BLE';
+  CheckEquals(QuotedStr(TableName), SQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+  //CheckEquals(QuotedStr(TableName), FailingSQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+  TableName := '''TABLE''';
+  CheckEquals(QuotedStr(TableName), SQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+  //CheckEquals(QuotedStr(TableName), FailingSQLQuotedStr(Pointer(TableName), Length(TableName), QuoteChar));
+end;
+
+procedure TZTestSysUtilsCase.RunDequotedStr;
+begin
+  case Length(FQuote) of
+    1: SQLDequotedStr(FSrc, FQuote[1]);
+    2: SQLDequotedStr(FSrc, FQuote[1], FQuote[2]);
+    else Fail('Unexpected Quote length');
+  end;
+end;
+
+procedure TZTestSysUtilsCase.TestDequotedStr;
+const
+  // Quote; Unquoted; Quoted
+  TestCases_SglQuote: array[0..5] of array[0..2] of string =
+  (
+    ('"', '', '""'),
+    ('"', '"', '""""'),
+    ('"', 'no quote', 'no quote'),
+    ('"', 'no "quote', 'no "quote'),
+    ('"', 'no quote', '"no quote"'),
+    ('"', 'single "quote', '"single ""quote"')
+  );
+
+  TestCases_DblQuote: array[0..9] of array[0..2] of string =
+  (
+    ('""', '', '""'),
+    ('""', '"', '"'),
+    ('""', 'no quote', 'no quote'),
+    ('""', 'no "quote', 'no "quote'),
+    ('""', 'no quote', '"no quote"'),
+    ('""', 'single "quote', '"single ""quote"'),
+    ('[]', '', '[]'),
+    ('[]', 'no quote', '[no quote]'),
+    ('[]', 'single [quote', '[single [[quote]'),
+    ('[]', 'double [1] quote', '[double [[1]] quote]')
+  );
+
+  TestCases_WillRaise: array[0..3] of array[0..1] of string =
+  (
+    ('"',  '"single "quote"'),
+    ('""', '"single "quote"'),
+    ('[]', '[s]]'),
+    ('[]', '[]]')
+  );
+
+var i: Integer;
+begin
+  for i := Low(TestCases_SglQuote) to High(TestCases_SglQuote) do
+    CheckEquals(TestCases_SglQuote[i][1], SQLDequotedStr(TestCases_SglQuote[i][2], TestCases_SglQuote[i][0][1]));
+  for i := Low(TestCases_DblQuote) to High(TestCases_DblQuote) do
+    CheckEquals(TestCases_DblQuote[i][1], SQLDequotedStr(TestCases_DblQuote[i][2], TestCases_DblQuote[i][0][1], TestCases_DblQuote[i][0][2]));
+
+  for i := Low(TestCases_WillRaise) to High(TestCases_WillRaise) do
+  begin
+    FQuote := TestCases_WillRaise[i][0];
+    FSrc := TestCases_WillRaise[i][1];
+    CheckException(RunDequotedStr, EArgumentException, '', 'Source: <'+FSrc+'>');
+  end;
 end;
 
 procedure TZTestSysUtilsCase.TestRawSQLDateToDateTime;
@@ -600,7 +799,7 @@ const
   begin
     ZFormatSettings.DateTimeFormat := DateTimeFormat;
     ZFormatSettings.DateTimeFormatLen := Length(DateTimeFormat);
-    CheckEquals(Expected, ZSysUtils.RawSQLTimeStampToDateTime(PAnsiChar(Value), Length(Value), ZFormatSettings, Failed), 'Expected Date');
+    CheckEqualsDate(Expected, ZSysUtils.RawSQLTimeStampToDateTime(PAnsiChar(Value), Length(Value), ZFormatSettings, Failed), [], 'Expected Date');
     CheckEquals(ExpFailed, Failed, 'Fail value');
   end;
 

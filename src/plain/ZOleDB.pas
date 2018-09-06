@@ -48,8 +48,8 @@ Unit ZOleDB;
 //  http://py-com-tools.googlecode.com/svn/trunk/sdk-tlbs/
 
 interface
+
 {$I ZPlain.inc}
-{$IF defined(ENABLE_ADO) or defined(ENABLE_OLEDB)}
 
 {$IFDEF WIN64}
 {$ALIGN 8}
@@ -61,7 +61,8 @@ interface
 // Dependency: stdole v2 (stdole2.pas)
 //  Warning: renamed method 'Reset' in IDBBinderProperties to 'Reset_'
 Uses
-  Windows,ActiveX,Classes,Variants, ZCompatibility;
+  Windows, ActiveX, Classes, Variants, ZCompatibility;
+
 Const
   IID_IColumnsInfo : TGUID = '{0C733A11-2A1C-11CE-ADE5-00AA0044773D}';
 
@@ -136,7 +137,7 @@ Const
   (*IID_IErrorInfo : TGUID = '{1CF2B120-547D-101B-8E65-08002B2BD119}';
   IID_IErrorLookup : TGUID = '{0C733A66-2A1C-11CE-ADE5-00AA0044773D}';*)
   IID_ISQLErrorInfo : TGUID = '{0C733A74-2A1C-11CE-ADE5-00AA0044773D}';
-  (*IID_IGetDataSource : TGUID = '{0C733A75-2A1C-11CE-ADE5-00AA0044773D}'; *)
+  IID_IGetDataSource : TGUID = '{0C733A75-2A1C-11CE-ADE5-00AA0044773D}';
   IID_ITransactionLocal : TGUID = '{0C733A5F-2A1C-11CE-ADE5-00AA0044773D}';
   IID_ITransaction : TGUID = '{0FB15084-AF41-11CE-BD2B-204C4F4F5020}';
   IID_ITransactionOptions : TGUID = '{3A6AD9E0-23B9-11CF-AD60-00AA00A74CCD}';
@@ -1373,7 +1374,7 @@ type
  (*IErrorInfo = interface;
  IErrorLookup = interface;*)
  ISQLErrorInfo = interface;
- (*IGetDataSource = interface;*)
+ IGetDataSource = interface;
  ITransactionLocal = interface;
  ITransaction = interface;
  ITransactionOptions = interface;
@@ -1405,6 +1406,7 @@ type
 //Map CoClass to its default interface
 
 //from oledb.h
+  ULONG = LongWord;
   // Length of a non-character object, size
   PDBLENGTH = ^DBLENGTH;
   DBLENGTH = NativeUInt; //ULONGLONG
@@ -2601,7 +2603,7 @@ type
     function Execute(const pUnkOuter: IUnknown; const riid: TGUID;
       var pParams: TDBPARAMS; pcRowsAffected: PDBROWCOUNT; ppRowset: PIUnknown):HRESULT;stdcall;  {note MSDN and OleDB.h are different for ppRowset}
     // GetDBSession :
-   function GetDBSession(var riid: TGUID; out ppSession:IUnknown):HRESULT;stdcall;
+   function GetDBSession(const riid: TGUID; out ppSession:IUnknown):HRESULT;stdcall;
   end;
 
 
@@ -3024,17 +3026,15 @@ type
     // GetSQLInfo :
    function GetSQLInfo(out pbstrSQLState:WideString;out plNativeError:Integer):HRESULT;stdcall;
   end;
-(*
 
 // IGetDataSource :
 
  IGetDataSource = interface(IUnknown)
    ['{0C733A75-2A1C-11CE-ADE5-00AA0044773D}']
     // GetDataSource :
-   function GetDataSource(var riid:GUID;out ppDataSource:IUnknown):HRESULT;stdcall;
+   function GetDataSource(const riid:TGUID;out ppDataSource:IUnknown):HRESULT;stdcall;
   end;
 
-*)
 // ITransaction :
   {MSSDK transact.h}
   ITransaction = interface(IUnknown)
@@ -3055,8 +3055,8 @@ type
     // GetOptionsObject :
     procedure GetOptionsObject(out ppOptions: ITransactionOptions);stdcall;
     // StartTransaction :
-    procedure StartTransaction(isoLevel:ISOLEVEL;isoFlags:ULONG;
-      pOtherOptions:ITransactionOptions; pulTransactionLevel: PULONG);stdcall;
+    function StartTransaction(isoLevel:ISOLEVEL;isoFlags:ULONG;
+      pOtherOptions:ITransactionOptions; pulTransactionLevel: PULONG): HRESULT;stdcall;
   end;
 
 // ITransactionOptions :
@@ -3397,11 +3397,10 @@ const
   DB_NULLID: TDBID = (uguid: (guid: (D1: 0; D2: 0; D3:0; D4: (0, 0, 0, 0, 0, 0, 0, 0))); ekind: DBKIND(DBKIND_GUID_PROPID); uname: (ulpropid:0));
 
 //CoClasses
-{$IFDEF MISS_VARIANTCLEAR}
+{$IF NOT DECLARED(VariantClear)}
 function VariantClear(var varg: OleVariant): HResult; stdcall; external 'oleaut32.dll' name 'VariantClear';
-{$ENDIF}
 {$IFEND}
+
 implementation
 
 end.
-

@@ -62,18 +62,18 @@ uses
   Types,
 {$ENDIF}
   {$IFDEF FPC}fpcunit{$ELSE}TestFramework{$ENDIF}, Classes, SysUtils, DB,
-  {$IFDEF ENABLE_POOLED}ZClasses,{$ENDIF} ZDataset,
+  {$IFDEF ENABLE_POOLED}ZClasses,{$ENDIF} ZDataset, ZURL,
   ZCompatibility, ZDbcIntfs, ZConnection, Contnrs, ZTestCase, ZScriptParser, ZDbcLogging;
 
 const
   { protocol lists }
   pl_mysql_client_server = 'mysql,mysql-4.1,mysql-5,MariaDB-5';
-  pl_mysql_embedded = 'mysqld-4.1,mysqld-5';
+  pl_mysql_embedded = 'mysqld-4.1,mysqld-5,mysqld';
   pl_all_mysql = pl_mysql_client_server + ','+ pl_mysql_embedded;
   pl_all_postgresql = 'postgresql,postgresql-7,postgresql-8,postgresql-9';
   pl_all_sqlite = 'sqlite,sqlite-3';
-  pl_interbase_client_server = 'interbase-6,firebird-1.0,firebird-1.5,firebird-2.0,firebird-2.1,firebird-2.5,firebird-3.0';
-  pl_interbase_embedded = 'firebirdd-1.5,firebirdd-2.0,firebirdd-2.1,firebirdd-2.5,firebirdd-3.0';
+  pl_interbase_client_server = 'interbase-6,firebird-1.0,firebird-1.5,firebird-2.0,firebird-2.1,firebird-2.5,firebird-3.0,firebird,interbase';
+  pl_interbase_embedded = 'firebirdd-1.5,firebirdd-2.0,firebirdd-2.1,firebirdd-2.5,firebirdd-3.0,firebird,interbase';
   pl_all_interbase = pl_interbase_client_server + ',' + pl_interbase_embedded;
   pl_all_oracle = 'oracle,oracle-9i';
 
@@ -87,6 +87,21 @@ type
   TDataSetTypesDynArray = array of TFieldType;
   TResultSetTypesDynArray = array of TZSQLType;
 
+  // ! List of protocols totally mirrors protocol conditions used throughout the tests.
+  // Protocol type is determined by StartsWith(Protocol, ProtocolPrefixes[drv]),
+  // so one prefix means exactly one protocol type!
+  TProtocolType = (protUnknown, protMySQL, protPostgre, protSQLite, protFirebird, protInterbase,
+    protOracle, protASA, protFreeTDS, protMSSQL, protOleDB, protADO, protSyBase,
+    protODBC);
+
+const
+  // Strictly in lower-case
+  ProtocolPrefixes: array[TProtocolType] of string =
+    ('unknown', 'mysql', 'postgresql', 'sqlite', 'firebird', 'interbase',
+     'oracle', 'asa', 'freetds', 'mssql', 'oledb', 'ado', 'sybase',
+     'odbc');
+
+type
   {** Represents a SQL test database configuration. }
   { TZConnectionConfig }
   TZConnectionConfig = class
@@ -187,6 +202,7 @@ type
     function GetPort: Integer;
     function GetProperties: TStringDynArray;
     function GetProtocol : string;
+    function GetProtocolType: TProtocolType;
     function GetRebuild: Boolean;
     function GetUserName: string;
     procedure SetCurrentConnectionConfig(AValue: TZConnectionConfig);
@@ -241,12 +257,15 @@ type
     procedure PrintResultSet(ResultSet: IZResultSet;
       ShowTypes: Boolean; Note: string = '');
 
+    function GetConnectionUrl(const Param: String): TZURL;
+
     { Properties to access active connection settings. }
     property ConnectionConfig:TZConnectionConfig read FCurrentConnectionConfig write SetCurrentConnectionConfig;
     property ConnectionName: string read GetConnectionName;
     property LibLocation: string read GetLibLocation;
     property Alias: string read GetAlias;
     property Protocol: string read GetProtocol;
+    property ProtocolType: TProtocolType read GetProtocolType;
     property HostName: string read GetHostName;
     property Port: Integer read GetPort;
     property Database: string read GetDatabase;
@@ -270,7 +289,6 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
     function IsRealPreparableTest: Boolean; override;
-    function GetConnectionUrl(Param: String): string;
 
     property Connection: IZConnection read FConnection write FConnection;
   end;
@@ -322,8 +340,9 @@ const
 
 implementation
 
-uses {$IFDEF WITH_FTGUID}ComObj, ActiveX,{$ENDIF} Math,
-  ZSysUtils, ZEncoding, ZTestConsts, ZTestConfig, ZSqlProcessor, ZURL, ZAbstractRODataset;
+uses
+  Math,
+  ZSysUtils, ZEncoding, ZTestConfig, ZSqlProcessor, ZAbstractRODataset;
 
 function PropPos(const PropDynArray: TStringDynArray; const AProp: String): Integer; overload;
 var
@@ -541,7 +560,7 @@ var
       if (CPType = 'CP_UTF16') then //autoencoding is allways true
         SetCharacterSets(MyCurrent)
       else
-        {$IF defined(MSWINDOWS) or defined(WITH_FPC_STRING_CONVERSATION) or defined(WITH_LCONVENCODING) or defined(DELPHI)}
+        {$IF defined(MSWINDOWS) or defined(WITH_FPC_STRING_CONVERSION) or defined(WITH_LCONVENCODING) or defined(DELPHI)}
         SetAutoEncodings(MyCurrent); //Allow Autoencoding only if supported!
         {$ELSE}
         SetCharacterSets(MyCurrent); //No Autoencoding available
@@ -655,6 +674,16 @@ begin
   {$ENDIF}
 end;
 
+function TZAbstractSQLTestCase.GetProtocolType: TProtocolType;
+var Prot: string;
+begin
+  Prot := LowerCase(Protocol);
+  for Result := Low(TProtocolType) to High(TProtocolType) do
+    if StartsWith(Prot, ProtocolPrefixes[Result]) then
+      Exit;
+  Result := protUnknown;
+end;
+
 function TZAbstractSQLTestCase.GetRebuild: Boolean;
 begin
   Result := FCurrentConnectionConfig.Rebuild;
@@ -729,8 +758,12 @@ end;
 }
 procedure TZAbstractSQLTestCase.Fail(Msg: string; ErrorAddr: Pointer = nil);
 begin
+  {$IFDEF FPC2_6DOWN}
+  inherited Fail(Format('%s/%s: %s', [ConnectionName, Protocol, Msg]));
+  {$ELSE}
   inherited Fail(Format('%s/%s: %s', [ConnectionName, Protocol, Msg]),
     ErrorAddr);
+  {$ENDIF}
 end;
 
 {**
@@ -832,7 +865,7 @@ var GUID: TGUID;
 {$ENDIF}
 begin
   {$IFDEF WITH_FTGUID}
-  if CoCreateGuid(GUID) = S_OK then
+  if CreateGuid(GUID) = S_OK then
     Result := GUIDToString(GUID)
   else
   {$ENDIF}
@@ -846,7 +879,7 @@ var GUID: TGUID;
 begin
   SetLength(Result, 16);
   {$IFDEF WITH_FTGUID}
-  if CoCreateGuid(GUID) = S_OK then
+  if CreateGuid(GUID) = S_OK then
     System.Move(Pointer(@GUID)^, Pointer(Result)^, 16)
   else
   {$ENDIF}
@@ -863,7 +896,7 @@ begin
   Bts := RandomGUIDBytes;
   Result := GUID;
   {$ELSE}
-  CoCreateGuid(Result);
+  CreateGuid(Result);
   {$ENDIF}
 end;
 
@@ -1076,12 +1109,9 @@ function TZAbstractSQLTestCase.GetDBTestStream(const Value: ZWideString;
 var
   Ansi: RawByteString;
 begin
-  Result := TMemoryStream.Create;
   if ( ConSettings.CPType = cCP_UTF16 ) then
-  begin
-    Result.Write(PWideChar(Value)^, Length(Value)*2);
-    Result.Position := 0;
-  end else begin
+    Result := StreamFromData(Value)
+  else begin
     case ConSettings.ClientCodePage.Encoding of
       ceAnsi:
         if ConSettings.AutoEncode then //Revert the expected value to test
@@ -1107,8 +1137,7 @@ begin
               Ansi := UTF8Encode(Value);
         end;
     end;
-    Result.Write(PAnsiChar(Ansi)^, Length(Ansi));
-    Result.Position := 0;
+    Result := StreamFromData(Ansi);
   end;
 end;
 
@@ -1158,23 +1187,17 @@ end;
 }
 function TZAbstractSQLTestCase.CreateDbcConnection: IZConnection;
 var
-  zURL: TZURL;
-  TempProperties :TStrings;
-  I: Integer;
+  TempURL: TZURL;
 begin
-  zURL := TZURL.Create(Format('zdbc:%s://', [Protocol]), HostName, Port, Database, UserName, Password, nil);
-  zURL.LibLocation := LibLocation;
-  TempProperties := TStringList.Create;
-  for I := 0 to High(Properties) do
-  begin
-    TempProperties.Add(Properties[I])
+  TempURL := GetConnectionUrl('');
+  try
+    Result := DriverManager.GetConnection(TempURL.URL);
+    {$IFDEF ZEOS_TEST_ONLY}
+    Result.SetTestMode(ConnectionConfig.TestMode);
+    {$ENDIF}
+  finally
+    TempURL.Free;
   end;
-  Result := DriverManager.GetConnectionWithParams(zURL.URL, TempProperties);
-  {$IFDEF ZEOS_TEST_ONLY}
-  Result.SetTestMode(ConnectionConfig.TestMode);
-  {$ENDIF}
-  TempProperties.Free;
-  zURL.Free;
 end;
 
 {**
@@ -1290,6 +1313,28 @@ begin
   end;
 end;
 
+{**
+  Gets a connection URL object.
+  @return a built connection URL object.
+}
+function TZAbstractSQLTestCase.GetConnectionUrl(const Param: String): TZURL;
+var
+  I: Integer;
+begin
+  Result := TZURL.Create;
+  Result.Protocol := Protocol;
+  Result.HostName := HostName;
+  Result.Port := Port;
+  Result.Database := Database;
+  Result.UserName := UserName;
+  Result.Password := Password;
+  Result.LibLocation := LibLocation;
+
+  for I := 0 to High(Properties) do
+    Result.Properties.Add(Properties[I]);
+  Result.Properties.Add(Param);
+end;
+
 type
   {** Implements a supplementary generic SQL test case. }
 
@@ -1367,19 +1412,22 @@ procedure TZSupplementarySQLTestCase.ExecuteScripts(
 var
   I: Integer;
   ScriptPath: string;
+  ScriptName: String;
 begin
   { Sets the right error event handler. }
   if RaiseException then
     FSQLProcessor.OnError := RaiseError
   else FSQLProcessor.OnError := SuppressError;
 
-  ScriptPath := TestConfig.ConfigFilePath;
+  ScriptPath := TestConfig.ScriptPath;
 
   for I := 0 to High(FileNames) do
   begin
     FSQLProcessor.Script.Clear;
     try
-      FSQLProcessor.Script.LoadFromFile(ScriptPath + FileNames[I]);
+      ScriptName := ScriptPath + FileNames[I];
+      Writeln('Executing ' + ScriptName);
+      FSQLProcessor.Script.LoadFromFile(ScriptName);
       // To avoid parameter handling while rebuild! Parameters must not be handled!
       FSQLProcessor.ParamCheck := false;
     except
@@ -1459,22 +1507,6 @@ end;
 function TZAbstractDbcSQLTestCase.IsRealPreparableTest: Boolean;
 begin
   Result:= True;
-end;
-
-function TZAbstractDbcSQLTestCase.GetConnectionUrl(Param: String): string;
-var
-  TempProperties: TStrings;
-  I: Integer;
-begin
-  TempProperties := TStringList.Create;
-  for I := 0 to High(Properties) do
-  begin
-    TempProperties.Add(Properties[I])
-  end;
-  TempProperties.Add(Param);
-  Result := DriverManager.ConstructURL(Protocol, HostName, Database,
-  UserName, Password, Port, TempProperties);
-  TempProperties.Free;
 end;
 
 { TZAbstractCompSQLTestCase }
@@ -1571,4 +1603,5 @@ finalization
   if Assigned(TZAbstractSQLTestCase.CVConnectionConfigs) then
     TZAbstractSQLTestCase.CVConnectionConfigs.Free;
 {$ENDIF}
+
 end.

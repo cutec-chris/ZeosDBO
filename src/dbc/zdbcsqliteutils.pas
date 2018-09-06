@@ -67,8 +67,8 @@ uses
   @result the SQLType field type value
 }
 function ConvertSQLiteTypeToSQLType(var TypeName: RawByteString;
-  const UndefinedVarcharAsStringLength: Integer; var Precision: Integer;
-  var Decimals: Integer; const CtrlsCPType: TZControlsCodePage): TZSQLType;
+  UndefinedVarcharAsStringLength: Integer; var Precision: Integer;
+  var Decimals: Integer; CtrlsCPType: TZControlsCodePage): TZSQLType;
 
 {**
   Checks for possible sql errors.
@@ -78,10 +78,9 @@ function ConvertSQLiteTypeToSQLType(var TypeName: RawByteString;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckSQLiteError(const PlainDriver: IZSQLitePlainDriver;
-  const Handle: PSqlite; const ErrorCode: Integer; const ErrorMessage: PAnsiChar;
-  const LogCategory: TZLoggingCategory; const LogMessage: RawByteString;
-  const ConSettings: PZConSettings);
+procedure CheckSQLiteError(const PlainDriver: TZSQLitePlainDriver;
+  Handle: PSqlite; ErrorCode: Integer; LogCategory: TZLoggingCategory;
+  const LogMessage: RawByteString; ConSettings: PZConSettings);
 
 {**
   Decodes a SQLite Version Value and Encodes it to a Zeos SQL Version format:
@@ -96,7 +95,7 @@ function ConvertSQLiteVersionToSQLVersion(SQLiteVersion: PAnsiChar ): Integer;
 implementation
 
 uses {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
-  ZMessages, ZFastCode;
+  ZMessages, ZFastCode, ZClasses;
 
 {**
   Convert string SQLite field type to SQLType
@@ -106,30 +105,36 @@ uses {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
   @result the SQLType field type value
 }
 function ConvertSQLiteTypeToSQLType(var TypeName: RawByteString;
-  const UndefinedVarcharAsStringLength: Integer; var Precision: Integer;
-  var Decimals: Integer; const CtrlsCPType: TZControlsCodePage): TZSQLType;
+  UndefinedVarcharAsStringLength: Integer; var Precision: Integer;
+  var Decimals: Integer; CtrlsCPType: TZControlsCodePage): TZSQLType;
 var
   pBL, pBR, pC: Integer;
+  P: PAnsiChar;
 begin
   TypeName := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}UpperCase(TypeName);
   Result := stString;
   Precision := 0;
   Decimals := 0;
-
   pBL := ZFastCode.Pos({$IFDEF UNICODE}RawByteString{$ENDIF}('('), TypeName);
   if pBL > 0 then begin
-    pBR := ZFastCode.PosEx({$IFDEF UNICODE}RawByteString{$ENDIF}(')'), TypeName, pBL+1);
-    if (pBR > 0) then begin
-      pC := ZFastCode.PosEx({$IFDEF UNICODE}RawByteString{$ENDIF}(','), TypeName, pBL+1);
-      TypeName[pBR] := #0;
-      if pC > 0 then begin
-        TypeName[pC] := #0;
-        Precision := RawToIntDef(@TypeName[pBL+1], 0);
-        Decimals := RawToIntDef(@TypeName[pC+1], 0);
-      end else
-        Precision := RawToIntDef(@TypeName[pBL+1], 0);
-      TypeName := Copy(TypeName, 1, pBL - 1);
-    end;
+    P := {%H-}Pointer(NativeUInt(TypeName)+Word(pBL));
+    Precision := ValRawInt(P, pC);
+    while (P+pC-1)^ = ' ' do inc(pC);
+    if (P+pC-1)^ = ',' then begin
+      Decimals := ValRawInt(P+pC, pBR);
+      while (P+pC+pBR-1)^ = ' ' do inc(pBR);
+      if (P+pC+pBR-1)^ = ')' then begin
+        while (P-2)^ = ' ' do Dec(p); //trim rigth
+        TypeName := Copy(TypeName, 1, P-Pointer(TypeName)-1)
+      end else begin //invalid
+        Precision := 0;
+        Decimals := 0;
+      end;
+    end else if (P+pC-1)^ = ')' then begin
+      while (P-2)^ = ' ' do Dec(p); //trim rigth
+      TypeName := Copy(TypeName, 1, P-Pointer(TypeName)-1)
+    end else
+      Precision := 0;
   end;
   if TypeName = '' then
     Result := stString
@@ -212,28 +217,57 @@ end;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckSQLiteError(const PlainDriver: IZSQLitePlainDriver;
-  const Handle: PSqlite; const ErrorCode: Integer; const ErrorMessage: PAnsiChar;
-  const LogCategory: TZLoggingCategory; const LogMessage: RawByteString;
-  const ConSettings: PZConSettings);
+procedure CheckSQLiteError(const PlainDriver: TZSQLitePlainDriver;
+  Handle: PSqlite; ErrorCode: Integer; LogCategory: TZLoggingCategory;
+  const LogMessage: RawByteString; ConSettings: PZConSettings);
 var
-  Error: RawByteString;
+  ErrorStr, ErrorMsg: RawByteString;
 begin
-  if ErrorMessage <> nil then
-  begin
-    Error := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}Trim(ErrorMessage);
-    PlainDriver.FreeMem(ErrorMessage);
-  end
-  else
-    Error := '';
-  if not (ErrorCode in [SQLITE_OK, SQLITE_ROW, SQLITE_DONE]) then
-  begin
-    if Error = '' then
-      Error := PlainDriver.ErrorString(Handle, ErrorCode);
+  if not (ErrorCode in [SQLITE_OK, SQLITE_ROW, SQLITE_DONE]) then begin
+    ErrorMsg := '';
+    if Assigned(PlainDriver.sqlite3_extended_errcode) then
+      ErrorCode := PlainDriver.sqlite3_extended_errcode(Handle);
+    if ( Handle <> nil ) and ( Assigned(PlainDriver.sqlite3_errstr) ) then
+      ErrorStr := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}Trim(PLainDriver.sqlite3_errstr(ErrorCode));
+    if ErrorStr = '' then
+      case ErrorCode of
+        SQLITE_OK:          ErrorStr := 'not an error';
+        SQLITE_ERROR:       ErrorStr := 'SQL logic error or missing database';
+        SQLITE_INTERNAL:    ErrorStr := 'internal SQLite implementation flaw';
+        SQLITE_PERM:        ErrorStr := 'access permission denied';
+        SQLITE_ABORT:       ErrorStr := 'callback requested query abort';
+        SQLITE_BUSY:        ErrorStr := 'database is locked';
+        SQLITE_LOCKED:      ErrorStr := 'database table is locked';
+        SQLITE_NOMEM:       ErrorStr := 'out of memory';
+        SQLITE_READONLY:    ErrorStr := 'attempt to write a readonly database';
+        SQLITE_INTERRUPT:   ErrorStr := 'interrupted';
+        SQLITE_IOERR:       ErrorStr := 'disk I/O error';
+        SQLITE_CORRUPT:     ErrorStr := 'database disk image is malformed';
+        SQLITE_NOTFOUND:    ErrorStr := 'table or record not found';
+        SQLITE_FULL:        ErrorStr := 'database is full';
+        SQLITE_CANTOPEN:    ErrorStr := 'unable to open database file';
+        SQLITE_PROTOCOL:    ErrorStr := 'database locking protocol failure';
+        SQLITE_EMPTY:       ErrorStr := 'table contains no data';
+        SQLITE_SCHEMA:      ErrorStr := 'database schema has changed';
+        SQLITE_TOOBIG:      ErrorStr := 'too much data for one table row';
+        SQLITE_CONSTRAINT:  ErrorStr := 'constraint failed';
+        SQLITE_MISMATCH:    ErrorStr := 'datatype mismatch';
+        SQLITE_MISUSE:      ErrorStr := 'library routine called out of sequence';
+        SQLITE_NOLFS:       ErrorStr := 'kernel lacks large file support';
+        SQLITE_AUTH:        ErrorStr := 'authorization denied';
+        SQLITE_FORMAT:      ErrorStr := 'auxiliary database format error';
+        SQLITE_RANGE:       ErrorStr := 'bind index out of range';
+        SQLITE_NOTADB:      ErrorStr := 'file is encrypted or is not a database';
+        else                ErrorStr := 'unknown error';
+      end
+    else if ( Handle <> nil ) and ( Assigned(PlainDriver.sqlite3_errmsg) ) then
+      ErrorMsg := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}Trim(PLainDriver.sqlite3_errmsg(Handle));
+    if ErrorMsg <> '' then
+      ErrorStr := 'Error: '+ErrorStr+LineEnding+'Message: '+ErrorMsg;
     DriverManager.LogError(LogCategory, ConSettings^.Protocol, LogMessage,
-      ErrorCode, Error);
+      ErrorCode, ErrorStr);
     raise EZSQLException.CreateWithCode(ErrorCode, Format(SSQLError1,
-      [ConSettings.ConvFuncs.ZRawToString(Error, ConSettings^.ClientCodePage^.CP, ConSettings^.CTRL_CP)]));
+      [ConSettings.ConvFuncs.ZRawToString(ErrorStr, ConSettings^.ClientCodePage^.CP, ConSettings^.CTRL_CP)]));
   end;
 end;
 
@@ -250,7 +284,8 @@ function ConvertSQLiteVersionToSQLVersion(SQLiteVersion: PAnsiChar ): Integer;
 var
   MajorVersion, MinorVersion, SubVersion, Code: Integer;
 begin
-  MajorVersion := ValRawInt(SQLiteVersion, Code{%H-});
+  Code := 0;
+  MajorVersion := ValRawInt(SQLiteVersion, Code);
   Inc(SQLiteVersion, Code);
   MinorVersion := ValRawInt(SQLiteVersion, Code);
   Inc(SQLiteVersion, Code);

@@ -107,13 +107,13 @@ function ConvertDBLibNullability(DBLibNullability: Byte): TZColumnNullableType;
   @param ParameterIndex the first parameter is 1, the second is 2, ...
   @return a string representation of the parameter.
 }
-function PrepareSQLParameter(const Value: TZVariant; const ParamType: TZSQLType;
+function PrepareSQLParameter(const Value: TZVariant; ParamType: TZSQLType;
   const ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
-  const NChar: Boolean = False): RawByteString;
+  NChar: Boolean = False): RawByteString;
 
 implementation
 
-uses ZSysUtils, ZEncoding, ZDbcUtils
+uses ZSysUtils, ZEncoding, ZDbcUtils, ZClasses, ZFastCode
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 {**
@@ -320,106 +320,84 @@ end;
   @param ParameterIndex the first parameter is 1, the second is 2, ...
   @return a string representation of the parameter.
 }
-function PrepareSQLParameter(const Value: TZVariant; const ParamType: TZSQLType;
-  const ClientVarManager: IZClientVariantManager; ConSettings: PZConSettings;
-  const NChar: Boolean = False): RawByteString;
+function PrepareSQLParameter(const Value: TZVariant; ParamType: TZSQLType;
+  const ClientVarManager: IZClientVariantManager;
+  ConSettings: PZConSettings; NChar: Boolean = False): RawByteString;
 var
   TempBytes: TBytes;
   TempBlob: IZBlob;
 begin
   TempBytes := nil;
 
-  if SoftVarManager.IsNull(Value) then
-    Result := 'NULL'
-  else
-  begin
-    case ParamType of
-      stBoolean:
-        Result := BoolStrIntsRaw[ClientVarManager.GetAsBoolean(Value)];
-      stByte, stShort, stWord, stSmall, stLongWord, stInteger, stULong, stLong,
-      stFloat, stDouble, stCurrency, stBigDecimal:
-        Result := ClientVarManager.GetAsRawByteString(Value);
-      stString, stUnicodeString:
-        if NChar then
-          Result := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}AnsiQuotedStr(ClientVarManager.GetAsRawByteString(Value, zCP_UTF8), #39)
+  if SoftVarManager.IsNull(Value)
+  then Result := 'NULL'
+  else case ParamType of
+    stBoolean:
+      Result := BoolStrIntsRaw[ClientVarManager.GetAsBoolean(Value)];
+    stByte, stShort, stWord, stSmall, stLongWord, stInteger, stULong, stLong,
+    stFloat, stDouble, stCurrency, stBigDecimal:
+      Result := ClientVarManager.GetAsRawByteString(Value);
+    stString, stUnicodeString:
+      if NChar
+      then Result := ZSysUtils.SQLQuotedStr(ClientVarManager.GetAsRawByteString(Value, zCP_UTF8),AnsiChar(#39))
+      else Result := ZSysUtils.SQLQuotedStr(ClientVarManager.GetAsRawByteString(Value), AnsiChar(#39));
+    stBytes:
+      begin
+        TempBytes := ClientVarManager.GetAsBytes(Value);
+        if Length(TempBytes) = 0 then
+          Result := 'NULL'
         else
-          Result := {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings.{$ENDIF}AnsiQuotedStr(ClientVarManager.GetAsRawByteString(Value), #39);
-      stBytes:
-        begin
-          TempBytes := ClientVarManager.GetAsBytes(Value);
-          if Length(TempBytes) = 0 then
-            Result := 'NULL'
-          else
-            Result := GetSQLHexAnsiString(PAnsiChar(TempBytes), Length(TempBytes), True);
+          Result := GetSQLHexAnsiString(PAnsiChar(TempBytes), Length(TempBytes), True);
+      end;
+    stGuid:
+      begin
+        TempBytes := ClientVarManager.GetAsBytes(Value);
+        case Length(TempBytes) of
+          0: Result := 'NULL';
+          16: Result := ''''+GUIDToRaw(TempBytes)+'''';
+          else EZSQLException.Create('The TBytes was not 16 bytes long when trying to convert it to a GUID');
         end;
-      stGuid:
+      end;
+    stDate:
+      Result := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(Value),
+        ConSettings^.WriteFormatSettings, True);
+    stTime:
+      Result := DateTimeToRawSQLTime(ClientVarManager.GetAsDateTime(Value),
+        ConSettings^.WriteFormatSettings, True);
+    stTimestamp:
+      Result := DateTimeToRawSQLTimeStamp(ClientVarManager.GetAsDateTime(Value),
+        ConSettings^.WriteFormatSettings, True);
+    stAsciiStream, stUnicodeStream, stBinaryStream:
+      begin
+        TempBlob := SoftVarManager.GetAsInterface(Value) as IZBlob;
+        if not TempBlob.IsEmpty then
         begin
-          TempBytes := ClientVarManager.GetAsBytes(Value);
-          case Length(TempBytes) of
-            0: Result := 'NULL';
-            16: Result := GUIDToRaw(TempBytes);
-            else EZSQLException.Create('The TBytes was not 16 bytes long when trying to convert it to a GUID');
-          end;
-        end;
-      stDate:
-        Result := DateTimeToRawSQLDate(ClientVarManager.GetAsDateTime(Value),
-          ConSettings^.WriteFormatSettings, True);
-      stTime:
-        Result := DateTimeToRawSQLTime(ClientVarManager.GetAsDateTime(Value),
-          ConSettings^.WriteFormatSettings, True);
-      stTimestamp:
-        Result := DateTimeToRawSQLTimeStamp(ClientVarManager.GetAsDateTime(Value),
-          ConSettings^.WriteFormatSettings, True);
-      stAsciiStream, stUnicodeStream, stBinaryStream:
-        begin
-          TempBlob := SoftVarManager.GetAsInterface(Value) as IZBlob;
-          if not TempBlob.IsEmpty then
-          begin
-            if ParamType = stBinaryStream then
-              Result := GetSQLHexAnsiString(PAnsiChar(TempBlob.GetBuffer), TempBlob.Length, True)
-            else
-              if TempBlob.IsClob then
-                if NChar then
-                {$IFDEF WITH_UNITANSISTRINGS}
-                  Result := AnsiStrings.AnsiQuotedStr(AnsiStrings.StringReplace(
-                    TempBlob.GetPAnsiChar(zCP_UTF8), #0, '', [rfReplaceAll]), '''')
-                else
-                  Result := AnsiStrings.AnsiQuotedStr(AnsiStrings.StringReplace(
-                    TempBlob.GetAnsiString, #0, '', [rfReplaceAll]), '''')
-                {$ELSE}
-                  Result := AnsiQuotedStr(StringReplace(
-                    TempBlob.GetPAnsiChar(zCP_UTF8), #0, '', [rfReplaceAll]), '''')
-                else
-                  Result := AnsiQuotedStr(StringReplace(
-                    TempBlob.GetAnsiString, #0, '', [rfReplaceAll]), '''')
-                {$ENDIF}
+          if ParamType = stBinaryStream then
+            Result := GetSQLHexAnsiString(PAnsiChar(TempBlob.GetBuffer), TempBlob.Length, True)
+          else begin
+            if TempBlob.IsClob then begin
+              if NChar
+              then TempBlob.GetPAnsiChar(zCP_UTF8)
+              else TempBlob.GetPAnsiChar(ConSettings^.ClientCodePage.CP);
+              Result := SQLQuotedStr(PAnsiChar(TempBlob.GetBuffer), TempBlob.Length, AnsiChar(#39))
+            end else
+              if NChar then
+                Result := SQLQuotedStr(
+                  GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
+                    TempBlob.Length, ConSettings, zCP_UTF8), AnsiChar(#39))
               else
-                if NChar then
-                {$IFDEF WITH_UNITANSISTRINGS}
-                  Result := AnsiStrings.AnsiQuotedStr(AnsiStrings.StringReplace(
-                    GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                      TempBlob.Length, ConSettings, zCP_UTF8), #0, '', [rfReplaceAll]), '''')
-                else
-                  Result := AnsiStrings.AnsiQuotedStr(AnsiStrings.StringReplace(
-                    GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                      TempBlob.Length, ConSettings), #0, '', [rfReplaceAll]), '''')
-                {$ELSE}
-                  Result := AnsiQuotedStr(StringReplace(
-                    GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                      TempBlob.Length, ConSettings, zCP_UTF8), #0, '', [rfReplaceAll]), '''')
-                else
-                  Result := AnsiQuotedStr(StringReplace(
-                    GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
-                      TempBlob.Length, ConSettings), #0, '', [rfReplaceAll]), '''')
-                {$ENDIF}
-          end
-          else
-            Result := 'NULL';
-          TempBlob := nil;
-        end;
-      else
-        Result := 'NULL';
-    end;
+                Result := SQLQuotedStr(
+                  GetValidatedAnsiStringFromBuffer(TempBlob.GetBuffer,
+                    TempBlob.Length, ConSettings), AnsiChar(#39));
+            if ZFastCode.Pos(RawByteString(#0), Result) > 1
+            then raise EZSQLException.Create('Character 0x00 is not allowed in Strings with Text and NText fields and this driver.');
+          end;
+        end else
+          Result := 'NULL';
+        TempBlob := nil;
+      end;
+    else
+      Result := 'NULL';
   end;
 end;
 

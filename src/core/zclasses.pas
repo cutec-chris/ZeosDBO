@@ -56,7 +56,8 @@ interface
 {$I ZCore.inc}
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes
+  {$IFDEF NO_UNIT_CONTNRS},System.Generics.Collections{$ENDIF};
 
 const
   ZEOS_MAJOR_VERSION = 7;
@@ -196,21 +197,73 @@ type
     property Count: Integer read GetCount;
   end;
 
-{$IFDEF WITH_NEWTOBJECT} // to suppress the overload warning of the Equals overload, Marco. (overload a non overload-declared funtion)
-  {$WARNINGS OFF}
-{$ENDIF}
   {** Implements an abstract interfaced object. }
+  // New TObject contains some methods with the same names but it has different
+  // result/parameter types so we just hide the inherited methods
   TZAbstractObject = class(TInterfacedObject, IZObject)
   public
-    function Equals(const Value: IZInterface): Boolean; {$IFDEF WITH_NEWTOBJECT}overload;{$ENDIF} virtual;
-    function GetHashCode: LongInt;
+    // Parameter type differs from base (TObject)
+    function Equals(const Value: IZInterface): Boolean; {$IFDEF WITH_NEWTOBJECT} reintroduce; {$ENDIF} virtual;
+    // Result type differs from base (PtrInt @ FPC, Integer @ Delphi)
+    function GetHashCode: LongInt; {$IFDEF WITH_NEWTOBJECT} reintroduce; {$ENDIF} virtual;
     function Clone: IZInterface; virtual;
-    function ToString: string;{$IFDEF WITH_NEWTOBJECT}override{$ELSE} virtual{$ENDIF} ;
+    // Result type differs from base (ansistring/shortstring @ FPC, string @ Delphi)
+    function ToString: string; {$IFDEF WITH_NEWTOBJECT} reintroduce; {$ENDIF} virtual;
     function InstanceOf(const IId: TGUID): Boolean;
   end;
-{$IFDEF WITH_NEWTOBJECT}
-  {$WARNINGS ON}
-{$ENDIF}
+
+  TZCharReaderStream = Class(TStream)
+  private
+    fEnd, fStart, fCurrent: PChar;
+  protected
+    function GetSize: Int64; override;
+  public
+    procedure SetBuffer(const Buffer: String);
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Seek(Offset: Longint; Origin: Word): Longint; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+  End;
+
+// Exceptions
+type
+  TZExceptionSpecificData = class
+  public
+    function Clone: TZExceptionSpecificData; virtual; abstract;
+  end;
+
+  {** Abstract SQL exception. }
+  EZSQLThrowable = class(Exception)
+  private
+    FErrorCode: Integer;
+    FStatusCode: String;
+  protected
+    FSpecificData: TZExceptionSpecificData;
+  public
+    constructor Create(const Msg: string);
+    constructor CreateWithCode(const ErrorCode: Integer; const Msg: string);
+    constructor CreateWithStatus(const StatusCode: String; const Msg: string);
+    constructor CreateWithCodeAndStatus(ErrorCode: Integer; const StatusCode: String; const Msg: string);
+    constructor CreateClone(const E:EZSQLThrowable);
+    destructor Destroy; override;
+
+    property ErrorCode: Integer read FErrorCode;
+    property StatusCode: string read FStatuscode; // The "String" Errocode // FirmOS
+    property SpecificData: TZExceptionSpecificData read FSpecificData; // Engine-specific data
+  end;
+
+  {** Generic SQL exception. }
+  EZSQLException = class(EZSQLThrowable);
+
+  {** Generic connection lost exception. }
+  EZSQLConnectionLost = class(EZSQLException);
+
+  {** Generic SQL warning. }
+  EZSQLWarning = class(EZSQLThrowable);
+
+  {$IFDEF NO_UNIT_CONTNRS}
+  TObjectList = class(TObjectList<TObject>);
+  {$ENDIF}
 
 implementation
 
@@ -319,6 +372,133 @@ end;
 function TZAbstractObject.ToString: string;
 begin
   Result := Format('%s <%p>', [ClassName, Pointer(Self)])
+end;
+
+{ TZCharReaderStream }
+
+function TZCharReaderStream.GetSize: Int64;
+begin
+  Result := Int64(fEnd-fStart){%H-}-1
+end;
+
+function TZCharReaderStream.Read(var Buffer; Count: Integer): Longint;
+begin
+  if (Count = SizeOf(Char)) and (fCurrent < fEnd) then begin
+    //just a little byte/dword inline move instead of Move()
+    //skip all possible compiler magic
+    {$IFDEF UNICODE}
+    Word(Buffer) := PWord(fCurrent)^;
+    {$ELSE}
+    Byte(Buffer) := PByte(fCurrent)^;
+    {$ENDIF}
+    Inc(fCurrent);
+    Result := SizeOf(Char);
+  end else
+    Result := 0
+end;
+
+function TZCharReaderStream.Seek(Offset: Integer; Origin: Word): Longint;
+begin
+  case Origin of
+    soFromBeginning: fCurrent := {%H-}Pointer({%H-}NativeInt(fStart)+Offset);
+    soFromCurrent:   fCurrent := {%H-}Pointer({%H-}NativeInt(fCurrent)+Offset);
+    soFromEnd:       fCurrent := {%H-}Pointer({%H-}NativeInt(fEnd-1)+Offset);
+  end;
+  Result := origin; //make compiler happy: a true positoned processing is nowhere used in our code
+  //Result := LongInt(fCurrent-fStart);
+end;
+
+function TZCharReaderStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  case Ord(Origin) of
+    soFromBeginning: fCurrent := {%H-}Pointer({%H-}NativeInt(fStart)+Offset);
+    soFromCurrent:   fCurrent := {%H-}Pointer({%H-}NativeInt(fCurrent)+Offset);
+    soFromEnd:       fCurrent := {%H-}Pointer({%H-}NativeInt(fEnd-1)+Offset);
+  end;
+  Result := Ord(origin); //make compiler happy: a true positoned processing is nowhere used in our code
+  //Result := Int64(fCurrent-fStart);
+end;
+
+procedure TZCharReaderStream.SetBuffer(const Buffer: String);
+begin
+  fStart := Pointer(Buffer);
+  fCurrent := fStart;
+  fEnd := fStart+Length(Buffer);
+end;
+
+{$IFDEF FPC} // parameters not used intentionally
+  {$PUSH}
+  {$WARN 5033 off : Function result does not seem to be set}
+  {$WARN 5024 off : Parameter "$1" not used}
+{$ENDIF}
+function TZCharReaderStream.Write(const Buffer; Count: Integer): Longint;
+begin
+  raise Exception.Create(SUnsupportedOperation);
+end;
+{$IFDEF FPC} {$POP} {$ENDIF}
+
+{ EZSQLThrowable }
+
+constructor EZSQLThrowable.CreateClone(const E: EZSQLThrowable);
+begin
+  inherited Create(E.Message);
+  FErrorCode:=E.ErrorCode;
+  FStatusCode:=E.Statuscode;
+  if E.SpecificData <> nil then
+    FSpecificData := E.SpecificData.Clone;
+end;
+
+{**
+  Creates an exception with message string.
+  @param Msg a error description.
+}
+constructor EZSQLThrowable.Create(const Msg: string);
+begin
+  inherited Create(Msg);
+  FErrorCode := -1;
+end;
+
+{**
+  Creates an exception with message string.
+  @param Msg a error description.
+  @param ErrorCode a native server error code.
+}
+constructor EZSQLThrowable.CreateWithCode(const ErrorCode: Integer;
+  const Msg: string);
+begin
+  inherited Create(Msg);
+  FErrorCode := ErrorCode;
+end;
+
+{**
+  Creates an exception with message string.
+  @param ErrorCode a native server error code.
+  @param StatusCode a server status code.
+  @param Msg a error description.
+}
+constructor EZSQLThrowable.CreateWithCodeAndStatus(ErrorCode: Integer;
+  const StatusCode, Msg: string);
+begin
+  inherited Create(Msg);
+  FErrorCode := ErrorCode;
+  FStatusCode := StatusCode;
+end;
+
+{**
+  Creates an exception with message string.
+  @param StatusCode a server status code.
+  @param Msg a error description.
+}
+constructor EZSQLThrowable.CreateWithStatus(const StatusCode, Msg: string);
+begin
+  inherited Create(Msg);
+  FStatusCode := StatusCode;
+end;
+
+destructor EZSQLThrowable.Destroy;
+begin
+  FreeAndNil(FSpecificData);
+  inherited;
 end;
 
 end.

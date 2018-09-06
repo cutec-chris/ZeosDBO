@@ -59,7 +59,7 @@ interface
 
 uses
   {$IFDEF FPC}testregistry{$ELSE}TestFramework{$ENDIF}, Classes,
-  ZClasses, SysUtils, ZCompatibility, ZTokenizer, ZTestCase;
+  SysUtils, ZCompatibility, ZTokenizer, ZTestCase;
 
 type
   {** Implements an abstract test case for tokenizers. }
@@ -130,7 +130,7 @@ begin
   for I := 0 to High(Tokens) do
   begin
     CheckEquals(Ord(TokenTypes[I]), Ord(Tokens[I].TokenType));
-    CheckEquals(TokenValues[I], Tokens[I].Value);
+    CheckEquals(TokenValues[I], TokenAsString(Tokens[I]));
   end;
 end;
 
@@ -164,6 +164,8 @@ var
   TestStr: string;
   StartTicks: Cardinal;
 begin
+  if SkipForReason(srNoPerformance) then Exit;
+
   TestStr := 'INSERT INTO Table (Fld1, Fld2) VALUES (12345678,'
     + ' ''abcdefghijklm'')';
 
@@ -172,6 +174,8 @@ begin
     Tokenizer.TokenizeBufferToList(TestStr, []).Free;
 
   PrintLn('Tokenizing performance = ' + IntToStr(GetTickCount - StartTicks));
+
+  BlankCheck;
 end;
 
 { TZTestTokenizer }

@@ -204,7 +204,6 @@ type
   {** Implements SQLite Database Metadata. }
   TZSQLiteDatabaseMetadata = class(TZAbstractDatabaseMetadata)
   protected
-    function DecomposeObjectString(const S: String): String; override;
     function CreateDatabaseInfo: IZDatabaseInfo; override; // technobot 2008-06-28
 
     function UncachedGetTables(const Catalog: string; const {%H-}SchemaPattern: string;
@@ -245,7 +244,7 @@ type
 implementation
 
 uses
-  ZDbcUtils, ZDbcSqLite, ZFastCode;
+  ZDbcUtils, ZDbcSqLite, ZFastCode, ZSelectSchema, ZClasses;
 
 { TZSQLiteDatabaseInfo }
 
@@ -334,7 +333,7 @@ end;
 }
 function TZSQLiteDatabaseInfo.StoresLowerCaseIdentifiers: Boolean;
 begin
-  Result := False;
+  Result := True;
 end;
 
 {**
@@ -344,7 +343,7 @@ end;
 }
 function TZSQLiteDatabaseInfo.StoresMixedCaseIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := False;
 end;
 
 {**
@@ -395,14 +394,14 @@ end;
 }
 function TZSQLiteDatabaseInfo.GetSQLKeywords: string;
 begin
-  Result := 'ALL,AND,AS,BETWEEN,BY,CASE,CHECK,COLLATE,COMMIT,CONSTRAINT,CREATE,'
-    + 'DEFAULT,DEFERRABLE,DELETE,DISTINCT,DROP,ELSE,EXCEPT,FOREIGN,FROM,GLOB,'
-    + 'GROUP,HAVING,IN,INDEX,INSERT,INTERSECT,INTO,IS,ISNULL,JOIN,LIKE,LIMIT,'
-    + 'NOT,NOTNULL,NULL,ON,OR,ORDER,PRIMARY,REFERENCES,ROLLBACK,SELECT,SET,'
-    + 'TABLE,THEN,TRANSACTION,UNION,UNIQUE,UPDATE,USING,VALUES,WHEN,WHERE,'
+  Result := 'ALL,AND,BETWEEN,CASE,CHECK,COLLATE,COMMIT,CONSTRAINT,'
+    + 'DEFAULT,DEFERRABLE,DISTINCT,ELSE,EXCEPT,FOREIGN,GLOB,'
+    + 'IN,INTERSECT,ISNULL,LIMIT,'
+    + 'NOT,NOTNULL,REFERENCES,ROLLBACK,'
+    + 'THEN,TRANSACTION,UNION,UNIQUE,USING,WHEN,'
     + 'ABORT,AFTER,ASC,ATTACH,BEFORE,BEGIN,DEFERRED,CASCADE,CLUSTER,CONFLICT,'
-    + 'COPY,CROSS,DATABASE,DELIMITERS,DESC,DETACH,EACH,END,EXPLAIN,FAIL,FOR,'
-    + 'FULL,IGNORE,IMMEDIATE,INITIALLY,INNER,INSTEAD,KEY,LEFT,MATCH,NATURAL,'
+    + 'COPY,CROSS,DATABASE,DELIMITERS,DESC,DETACH,EACH,END,EXPLAIN,FAIL,'
+    + 'FULL,IGNORE,IMMEDIATE,INITIALLY,INNER,INSTEAD,LEFT,MATCH,NATURAL,'
     + 'OF,OFFSET,OUTER,PRAGMA,RAISE,REPLACE,RESTRICT,RIGHT,ROW,STATEMENT,'
     + 'TEMP,TEMPORARY,TRIGGER,VACUUM,VIEW';
 end;
@@ -1034,7 +1033,8 @@ end;
 function TZSQLiteDatabaseInfo.GetDefaultTransactionIsolation:
   TZTransactIsolationLevel;
 begin
-  Result := tiNone;
+  //https://sqlite.org/pragma.html#pragma_read_uncommitted
+  Result := tiSerializable;
 end;
 
 {**
@@ -1056,7 +1056,8 @@ end;
 function TZSQLiteDatabaseInfo.SupportsTransactionIsolationLevel(
   const Level: TZTransactIsolationLevel): Boolean;
 begin
-  Result := True;
+  //https://sqlite.org/pragma.html#pragma_read_uncommitted
+  Result := Level in [tiSerializable, tiReadUncommitted];
 end;
 
 {**
@@ -1127,22 +1128,6 @@ end;
 
 
 { TZSQLiteDatabaseMetadata }
-
-{**
-  Decomposes a object name, AnsiQuotedStr or NullText
-  @param S the object string
-  @return a non-quoted string
-}
-function TZSQLiteDatabaseMetadata.DecomposeObjectString(const S: String): String;
-begin
-  if S = '' then
-    Result := S
-  else
-    if IC.IsQuoted(S) then
-       Result := IC.ExtractQuote(S)
-    else
-      Result := s;
-end;
 
 {**
   Constructs a database information object and returns the interface to it. Used
@@ -1388,7 +1373,7 @@ begin
 
         Result.UpdateInt(TableColColumnOrdPosIndex, GetInt(cid_index) +1);
         Result.UpdateBoolean(TableColColumnAutoIncIndex, (GetInt(pk_index) = 1) and (Ord(SQLType) > ord(stBoolean)) and (Ord(SQLType) < Ord(stFloat)));
-        Result.UpdateBoolean(TableColColumnCaseSensitiveIndex, False);
+        Result.UpdateBoolean(TableColColumnCaseSensitiveIndex, IC.IsCaseSensitive(GetString(name_index)));
         Result.UpdateBoolean(TableColColumnSearchableIndex, True);
         Result.UpdateBoolean(TableColColumnWritableIndex, True);
         Result.UpdateBoolean(TableColColumnDefinitelyWritableIndex, True);
@@ -1434,6 +1419,7 @@ const
 var
   Len: NativeUInt;
   Temp_scheme: string;
+  RS: IZResultSet;
 begin
   Result:=inherited UncachedGetPrimaryKeys(Catalog, Schema, Table);
 
@@ -1442,9 +1428,9 @@ begin
   else
     Temp_scheme := Schema +'.';
 
-  with GetConnection.CreateStatement.ExecuteQuery(
-    Format('PRAGMA %s table_info(''%s'')', [Temp_scheme,Table])) do
-  begin
+  RS := GetConnection.CreateStatement.ExecuteQuery(
+    Format('PRAGMA %s table_info(''%s'')', [Temp_scheme,Self.NormalizePatternCase(Table)]));
+  if RS <> nil then with RS do begin
     while Next do
     begin
       if GetInt(pk_index) = 0 then
@@ -1459,6 +1445,15 @@ begin
       Result.InsertRow;
     end;
     Close;
+  end;
+  if Result.IsBeforeFirst then begin
+    Result.MoveToInsertRow;
+    if Schema <> '' then
+      Result.UpdateString(CatalogNameIndex, Schema);
+    Result.UpdateString(TableNameIndex, Table);
+    Result.UpdateRawByteString(PrimaryKeyColumnNameIndex, 'rowid');
+    Result.UpdateInt(PrimaryKeyKeySeqIndex, 0);
+    Result.InsertRow;
   end;
 end;
 
@@ -1636,7 +1631,7 @@ begin
     begin
       while MainResultSet.Next do
       begin
-        if (ZFastCode.Pos(AnsiString(' autoindex '), MainResultSet.GetRawByteString(main_name_field_index)) = 0)
+        if (ZFastCode.Pos({$IFDEF NO_ANSISTRING}RawByteString{$ELSE}AnsiString{$ENDIF}(' autoindex '), MainResultSet.GetRawByteString(main_name_field_index)) = 0)
           and ((Unique = False) or (MainResultSet.GetInt(main_unique_field_index) = 0)) then
         begin
           ResultSet := GetConnection.CreateStatement.ExecuteQuery(
@@ -1651,7 +1646,7 @@ begin
             Result.UpdatePAnsiChar(IndexInfoColIndexNameIndex, MainResultSet.GetPAnsiChar(main_name_field_index, Len), @Len);
             Result.UpdateInt(IndexInfoColOrdPositionIndex, ResultSet.GetInt(sub_seqno_field_index)+FirstDbcIndex);
             Result.UpdatePAnsiChar(IndexInfoColColumnNameIndex, ResultSet.GetPAnsiChar(sub_name_field_index, Len), @Len);
-            Result.UpdateString(IndexInfoColAscOrDescIndex, 'A');
+            Result.UpdateRawByteString(IndexInfoColAscOrDescIndex, 'A');
             Result.UpdateInt(IndexInfoColCardinalityIndex, 0);
             Result.UpdateInt(IndexInfoColPagesIndex, 0);
             Result.InsertRow;
@@ -1698,7 +1693,7 @@ These constant define integer codes that represent the various text encodings su
 
   Result:=inherited UncachedGetCharacterSets;
 
-  for i := 0 to high(Encodings) do
+  for i := Low(Encodings) to High(Encodings) do
   begin
     Result.MoveToInsertRow;
     Result.UpdateString(CharacterSetsNameIndex, Encodings[i].CP); //CHARACTER_SET_NAME

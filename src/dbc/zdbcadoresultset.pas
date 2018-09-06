@@ -54,21 +54,23 @@ unit ZDbcAdoResultSet;
 interface
 
 {$I ZDbc.inc}
-{$IFDEF ENABLE_ADO}
 
 uses
 {$IFDEF USE_SYNCOMMONS}
-  SynCommons,
+  SynCommons, SynTable,
 {$ENDIF USE_SYNCOMMONS}
-{$IFNDEF FPC}
-  DateUtils,
-{$ENDIF}
   {$IFDEF WITH_TOBJECTLIST_INLINE}System.Types, System.Contnrs{$ELSE}Types{$ENDIF},
   Windows, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
-  {$IFDEF OLD_FPC}ZClasses, {$ENDIF}ZSysUtils, ZDbcIntfs, ZDbcGenericResolver,
+  ZSysUtils, ZDbcIntfs, ZDbcGenericResolver,
   ZDbcCachedResultSet, ZDbcCache, ZDbcResultSet, ZDbcResultsetMetadata, ZCompatibility, ZPlainAdo;
 
 type
+  {** Implements SQLite ResultSet Metadata. }
+  TZADOResultSetMetadata = class(TZAbstractResultSetMetadata)
+  protected
+    procedure ClearColumn(ColumnInfo: TZColumnInfo); override;
+  end;
+
   {** Implements Ado ResultSet. }
   TZAdoResultSet = class(TZAbstractResultSet)
   private
@@ -108,8 +110,7 @@ type
     function GetTimestamp(ColumnIndex: Integer): TDateTime; override;
     function GetBlob(ColumnIndex: Integer): IZBlob; override;
     {$IFDEF USE_SYNCOMMONS}
-    procedure ColumnsToJSON(JSONWriter: TJSONWriter; EndJSONObject: Boolean = True;
-      With_DATETIME_MAGIC: Boolean = False; SkipNullFields: Boolean = False); override;
+    procedure ColumnsToJSON(JSONWriter: TJSONWriter; JSONComposeOptions: TZJSONComposeOptions = [jcoEndJSONObject]); override;
     {$ENDIF USE_SYNCOMMONS}
   end;
 
@@ -130,11 +131,11 @@ implementation
 
 uses
   Variants, {$IFDEF FPC}ZOleDB{$ELSE}OleDB{$ENDIF},
-  ZMessages, ZDbcAdoUtils, ZEncoding, ZFastCode;
+  ZMessages, ZDbcAdoUtils, ZEncoding, ZFastCode, ZClasses;
 
 {$IFDEF USE_SYNCOMMONS}
 procedure TZAdoResultSet.ColumnsToJSON(JSONWriter: TJSONWriter;
-  EndJSONObject: Boolean; With_DATETIME_MAGIC: Boolean; SkipNullFields: Boolean);
+  JSONComposeOptions: TZJSONComposeOptions);
 var Len, C, H, I: Integer;
     P: PWideChar;
 begin
@@ -149,7 +150,7 @@ begin
       C := JSONWriter.Fields[i];
     if TVarData(FAdoRecordSet.Fields.Item[C].Value).VType in [varNull, varEmpty] then begin
       if JSONWriter.Expand then begin
-        if (not SkipNullFields) then begin
+        if not (jcsSkipNulls in JSONComposeOptions) then begin
           JSONWriter.AddString(JSONWriter.ColNames[I]);
           JSONWriter.AddShort('null,')
         end;
@@ -177,15 +178,30 @@ begin
         adCurrency:         JSONWriter.AddCurr64(TVarData(FAdoRecordSet.Fields.Item[C].Value).VCurrency);
         adBoolean:          JSONWriter.AddShort(JSONBool[TVarData(FAdoRecordSet.Fields.Item[C].Value).VBoolean]);
         adGUID:             JSONWriter.AddNoJSONEscapeW(Pointer(TVarData(FAdoRecordSet.Fields.Item[C].Value).VOleStr), 38);
+        adDBTime:           if (jcoMongoISODate in JSONComposeOptions) and (FAdoRecordSet.Fields.Item[C].Type_ <> adDBTime) then begin
+                              JSONWriter.AddShort('ISODate("0000-00-00');
+                              JSONWriter.AddDateTime(TVarData(FAdoRecordSet.Fields.Item[C].Value).VDate, jcoMilliseconds in JSONComposeOptions);
+                              JSONWriter.AddShort('Z")');
+                            end else begin
+                              if jcoDATETIME_MAGIC in JSONComposeOptions
+                              then JSONWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
+                              else JSONWriter.Add('"');
+                              JSONWriter.AddDateTime(TVarData(FAdoRecordSet.Fields.Item[C].Value).VDate, jcoMilliseconds in JSONComposeOptions);
+                              JSONWriter.Add('"');
+                            end;
         adDate,
         adDBDate,
-        adDBTime,
-        adDBTimeStamp:
-          begin
-            JSONWriter.Add('"');
-            JSONWriter.AddDateTime(TVarData(FAdoRecordSet.Fields.Item[C].Value).VDate);
-            JSONWriter.Add('"');
-          end;
+        adDBTimeStamp:      if (jcoMongoISODate in JSONComposeOptions) and (FAdoRecordSet.Fields.Item[C].Type_ <> adDBTime) then begin
+                              JSONWriter.AddShort('ISODate("');
+                              JSONWriter.AddDateTime(TVarData(FAdoRecordSet.Fields.Item[C].Value).VDate, jcoMilliseconds in JSONComposeOptions);
+                              JSONWriter.AddShort('Z")');
+                            end else begin
+                              if jcoDATETIME_MAGIC in JSONComposeOptions
+                              then JSONWriter.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR,4)
+                              else JSONWriter.Add('"');
+                              JSONWriter.AddDateTime(TVarData(FAdoRecordSet.Fields.Item[C].Value).VDate, jcoMilliseconds in JSONComposeOptions);
+                              JSONWriter.Add('"');
+                            end;
         adChar:
           begin
             JSONWriter.Add('"');
@@ -224,8 +240,7 @@ begin
       JSONWriter.Add(',');
     end;
   end;
-  if EndJSONObject then
-  begin
+  if jcoEndJSONObject in JSONComposeOptions then begin
     JSONWriter.CancelLastComma; // cancel last ','
     if JSONWriter.Expand then
       JSONWriter.Add('}');
@@ -241,7 +256,9 @@ end;
 }
 constructor TZAdoResultSet.Create(const Statement: IZStatement; const SQL: string; const AdoRecordSet: ZPlainAdo.RecordSet);
 begin
-  inherited Create(Statement, SQL, nil, Statement.GetConnection.GetConSettings);
+  inherited Create(Statement, SQL,
+    TZADOResultSetMetadata.Create(Statement.GetConnection.GetMetadata, SQL, Self),
+    Statement.GetConnection.GetConSettings);
   FAdoRecordSet := AdoRecordSet;
   Open;
 end;
@@ -256,13 +273,19 @@ var
   pcColumns: NativeUInt;
   prgInfo, OriginalprgInfo: PDBColumnInfo;
   ppStringsBuffer: PWideChar;
-  I: Integer;
+  I,j: Integer;
   FieldSize: Integer;
   ColumnInfo: TZColumnInfo;
   ColName: string;
   ColType: Integer;
-  HasAutoIncProp: Boolean;
   F: ZPlainAdo.Field20;
+  Prop: Property_;
+  function StringFromVar(const V: OleVariant): String;
+  begin
+    if not VarIsStr(V)
+    then Result := ''
+    else Result := V;
+  end;
 begin
 //Check if the current statement can return rows
   if not Assigned(FAdoRecordSet) or (FAdoRecordSet.State = adStateClosed) then
@@ -278,15 +301,6 @@ begin
   ColumnsInfo.Clear;
   AdoColumnCount := FAdoRecordSet.Fields.Count;
   SetLength(AdoColTypeCache, AdoColumnCount);
-
-  HasAutoIncProp := False;
-  if AdoColumnCount > 0 then
-    for I := 0 to FAdoRecordSet.Fields.Item[0].Properties.Count - 1 do
-      if FAdoRecordSet.Fields.Item[0].Properties.Item[I].Name = 'ISAUTOINCREMENT' then
-      begin
-        HasAutoIncProp := True;
-        Break;
-      end;
 
   if Assigned(prgInfo) then
     if prgInfo.iOrdinal = 0 then
@@ -304,7 +318,21 @@ begin
     {$ENDIF}
     ColType := F.Type_;
     ColumnInfo.ColumnLabel := ColName;
-    ColumnInfo.ColumnName := ColName;
+
+    for j := 0 to F.Properties.Count -1 do begin
+      Prop := F.Properties.Item[j];
+      if Prop.Name = 'BASECOLUMNNAME' then
+        ColumnInfo.ColumnName := StringFromVar(Prop.Value)
+      else if Prop.Name = 'BASETABLENAME' then
+        ColumnInfo.TableName := StringFromVar(Prop.Value)
+      else if Prop.Name = 'BASECATALOGNAME' then
+        ColumnInfo.CatalogName := StringFromVar(Prop.Value)
+      else if Prop.Name = 'BASESCHEMANAME' then
+        ColumnInfo.SchemaName := StringFromVar(Prop.Value)
+      else if (Prop.Name = 'ISAUTOINCREMENT') and not (TVarData(Prop.Value).VType in [varEmpty, varNull]) then
+        ColumnInfo.AutoIncrement := Prop.Value
+    end;
+
     ColumnInfo.ColumnType := ConvertAdoToSqlType(ColType, ConSettings.CPType);
     FieldSize := F.DefinedSize;
     if FieldSize < 0 then
@@ -316,8 +344,6 @@ begin
     ColumnInfo.Precision := FieldSize;
     ColumnInfo.Currency := ColType = adCurrency;
     ColumnInfo.Signed := False;
-    if HasAutoIncProp then
-      ColumnInfo.AutoIncrement := F.Properties.Item['ISAUTOINCREMENT'].Value;
     if ColType in [adTinyInt, adSmallInt, adInteger, adBigInt, adCurrency, adDecimal, adDouble, adNumeric, adSingle] then
       ColumnInfo.Signed := True;
 
@@ -392,6 +418,9 @@ begin
       FAdoRecordSet.MoveNext;
   FFirstFetch := False;
   Result := not FAdoRecordSet.EOF;
+  RowNo := RowNo +1;
+  if Result then
+    LastRowNo := RowNo;
 end;
 
 {**
@@ -500,7 +529,7 @@ begin
       adSingle:           Result := {$IFDEF UNICODE}FloatToSQLUnicode{$ELSE}FloatToSQLRaw{$ENDIF}(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VSingle);
       adDouble:           Result := {$IFDEF UNICODE}FloatToSQLUnicode{$ELSE}FloatToSQLRaw{$ENDIF}(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VDouble);
       adCurrency:         Result := CurrToStr(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VCurrency);
-      adBoolean: Result := {$IFDEF UNICODE}BoolToUnicodeEx{$ELSE}BoolToRawEx{$ENDIF}(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VBoolean);
+      adBoolean: Result := BoolToStrEx(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VBoolean);
       adGUID:
         {$IFDEF UNICODE}
         System.SetString(Result, TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VOleStr, 38);
@@ -839,6 +868,7 @@ begin
         begin
           Result := TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VOleStr;
           Len := FAdoRecordSet.Fields.Item[ColumnIndex].ActualSize;
+          while (Result+Len-1)^ = ' ' do dec(Len);
           Exit;
         end;
       adWChar: {fixed char fields}
@@ -1301,6 +1331,7 @@ end;
   @return the column value; if the value is SQL <code>NULL</code>, the
     value returned is <code>0</code>
 }
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 function TZAdoResultSet.GetULong(ColumnIndex: Integer): UInt64;
 var
   Len: NativeUint;
@@ -1360,6 +1391,7 @@ begin
         end;
     end;
 end;
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
 
 {**
   Gets the value of the designated column in the current row
@@ -1606,9 +1638,9 @@ begin
       adVarBinary,
       adLongVarBinary:
         begin
-          SetLength(Result, FAdoRecordSet.Fields.Item[ColumnIndex].ActualSize);
-          {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VArray.Data^,
-            Result[0], FAdoRecordSet.Fields.Item[ColumnIndex].ActualSize);
+          Result := BufferToBytes(
+            TVarData(FAdoRecordSet.Fields.Item[ColumnIndex].Value).VArray.Data,
+            FAdoRecordSet.Fields.Item[ColumnIndex].ActualSize);
         end;
       else
         begin
@@ -1697,7 +1729,7 @@ begin
       V := FAdoRecordSet.Fields.Item[ColumnIndex].Value;
       if VarIsStr(V) then
         Result := UnicodeSQLTimeStampToDateTime(PWideChar(ZWideString(V)),
-          Length(V), ConSettings^.ReadFormatSettings, Failed{%H-})
+          Length(V), ConSettings^.ReadFormatSettings, Failed)
       else
         Result := V;
     except
@@ -1816,12 +1848,18 @@ begin
   end;
 end;
 
-//(*
-{$ELSE}
-implementation
-{$ENDIF ENABLE_ADO}
-//*)
+{ TZADOResultSetMetadata }
+
+{**
+  Clears specified column information.
+  @param ColumnInfo a column information object.
+}
+procedure TZADOResultSetMetadata.ClearColumn(ColumnInfo: TZColumnInfo);
+begin
+  inherited ClearColumn(ColumnInfo);
+  {ColumnInfo.ReadOnly := True;
+  ColumnInfo.Writable := False;
+  ColumnInfo.DefinitelyWritable := False;}
+end;
+
 end.
-
-
-

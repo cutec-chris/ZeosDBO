@@ -53,8 +53,8 @@ interface
 {$I ZDbc.inc}
 
 uses
-  Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} Contnrs, DateUtils, SysUtils,
-  SyncObjs,
+  Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SyncObjs,
+  {$IFNDEF NO_UNIT_CONTNRS}Contnrs,{$ENDIF} DateUtils, SysUtils,
   ZCompatibility, ZClasses, ZURL, ZDbcConnection, ZDbcIntfs, ZPlainDriver,
   ZMessages, ZVariant;
 
@@ -121,12 +121,11 @@ type
     FConnectionPool: TConnectionPool;
     FAutoEncodeStrings: Boolean;
     FUseMetadata: Boolean;
-    {$IFDEF ZEOS_TEST_ONLY}
-    FTestMode: Byte;
-    {$ENDIF}
     function GetConnection: IZConnection;
   protected // IZConnection
     FClientCodePage: String;
+    procedure DeregisterStatement(const Value: IZStatement);
+    procedure RegisterStatement(const Value: IZStatement);
     procedure CheckCharEncoding(const CharSet: String;
       const DoArrange: Boolean = False);
     function GetClientCodePageInformations: PZCodePage; //EgonHugeist
@@ -175,10 +174,19 @@ type
   public
     constructor Create(const ConnectionPool: TConnectionPool);
     destructor Destroy; override;
+
     function GetBinaryEscapeString(const Value: RawByteString): String; overload;
     function GetBinaryEscapeString(const Value: TBytes): String; overload;
+    procedure GetBinaryEscapeString(Buf: Pointer; Len: LengthInt; out Result: RawByteString); overload; virtual;
+    procedure GetBinaryEscapeString(Buf: Pointer; Len: LengthInt; out Result: ZWideString); overload; virtual;
+
     function GetEscapeString(const Value: ZWideString): ZWideString; overload; virtual;
     function GetEscapeString(const Value: RawByteString): RawByteString; overload; virtual;
+    procedure GetEscapeString(Buf: PAnsichar; Len: LengthInt; out Result: RawByteString); overload;
+    procedure GetEscapeString(Buf: PAnsichar; Len: LengthInt; RawCP: Word; out Result: ZWideString); overload;
+    procedure GetEscapeString(Buf: PWideChar; Len: LengthInt; RawCP: Word; out Result: RawByteString); overload;
+    procedure GetEscapeString(Buf: PWideChar; Len: LengthInt; out Result: ZWideString); overload;
+
     function GetEncoding: TZCharEncoding;
     function GetConSettings: PZConSettings;
     {$IFDEF ZEOS_TEST_ONLY}
@@ -188,7 +196,6 @@ type
     function GetServerProvider: TZServerProvider;
   end;
 
-  {$WARNINGS OFF}
   TZDbcPooledConnectionDriver = class(TZAbstractDriver)
   private
     PoolList: TObjectList;
@@ -207,7 +214,6 @@ type
     constructor Create; override;
     destructor Destroy; override;
   end;
-  {$WARNINGS ON}
 
 implementation
 
@@ -269,10 +275,8 @@ var
   I: Integer;
 begin
   Result := nil;
-  I := 0;
 
-  while True do
-  begin
+  repeat
     FCriticalSection.Enter;
     try
       // Try to get an existing connection
@@ -339,7 +343,7 @@ begin
       raise Exception.Create(ClassName + '.Acquire'+LineEnding+'Connection pool reached the maximum limit');
             //2013-10-13 mse: please replace non ASCII characters (>127) by the 
             //#nnn notation in order to have encoding independent sources
-  end;
+  until False;
 
   //
   // If there is no connection in the pool, create a new one.
@@ -424,9 +428,11 @@ end;
 constructor TZDbcPooledConnection.Create(const ConnectionPool: TConnectionPool);
 begin
   FConnectionPool := ConnectionPool;
-  {$IFDEF ZEOS_TEST_ONLY}
-  FTestMode := 0;
-  {$ENDIF}
+end;
+
+procedure TZDbcPooledConnection.DeregisterStatement(const Value: IZStatement);
+begin
+  GetConnection.DeregisterStatement(Value);
 end;
 
 destructor TZDbcPooledConnection.Destroy;
@@ -624,6 +630,11 @@ begin
   GetConnection.PrepareTransaction(transactionid);
 end;
 
+procedure TZDbcPooledConnection.RegisterStatement(const Value: IZStatement);
+begin
+  GetConnection.RegisterStatement(Value);
+end;
+
 procedure TZDbcPooledConnection.Rollback;
 begin
   GetConnection.Rollback;
@@ -690,14 +701,6 @@ begin
   FAutoEncodeStrings := Value;
 end;
 
-{**
-  EgonHugeist:
-  Returns the BinaryString in a Tokenizer-detectable kind
-  If the Tokenizer don't need to predetect it Result = BinaryString
-  @param Value represents the Binary-String
-  @param EscapeMarkSequence represents a Tokenizer detectable EscapeSequence (Len >= 3)
-  @result the detectable Binary String
-}
 function TZDbcPooledConnection.GetBinaryEscapeString(const Value: RawByteString): String;
 begin
   Result := GetConnection.GetBinaryEscapeString(Value);
@@ -728,18 +731,6 @@ begin
   Result := @ConSettings;
 end;
 
-{$IFDEF ZEOS_TEST_ONLY}
-function TZDbcPooledConnection.GetTestMode: Byte;
-begin
-  Result := FTestMode;
-end;
-
-procedure TZDbcPooledConnection.SetTestMode(Mode: Byte);
-begin
-  FTestMode := Mode;
-end;
-{$ENDIF}
-
 {**
   Result 100% Compiler-Compatible
   And sets it Result to ClientCodePage by calling the
@@ -756,6 +747,42 @@ end;
 function TZDbcPooledConnection.GetClientVariantManager: IZClientVariantManager;
 begin
   Result := GetConnection.GetClientVariantManager;
+end;
+
+procedure TZDbcPooledConnection.GetBinaryEscapeString(Buf: Pointer;
+  Len: LengthInt; out Result: RawByteString);
+begin
+  GetConnection.GetBinaryEscapeString(Buf, Len, Result)
+end;
+
+procedure TZDbcPooledConnection.GetBinaryEscapeString(Buf: Pointer;
+  Len: LengthInt; out Result: ZWideString);
+begin
+  GetConnection.GetBinaryEscapeString(Buf, Len, Result)
+end;
+
+procedure TZDbcPooledConnection.GetEscapeString(Buf: PAnsichar; Len: LengthInt;
+  RawCP: Word; out Result: ZWideString);
+begin
+  GetConnection.GetEscapeString(Buf, Len, RawCP, Result)
+end;
+
+procedure TZDbcPooledConnection.GetEscapeString(Buf: PAnsichar; Len: LengthInt;
+  out Result: RawByteString);
+begin
+  GetConnection.GetEscapeString(Buf, Len, Result)
+end;
+
+procedure TZDbcPooledConnection.GetEscapeString(Buf: PWideChar; Len: LengthInt;
+  out Result: ZWideString);
+begin
+  GetConnection.GetEscapeString(Buf, Len, Result)
+end;
+
+procedure TZDbcPooledConnection.GetEscapeString(Buf: PWideChar; Len: LengthInt;
+  RawCP: Word; out Result: RawByteString);
+begin
+  GetConnection.GetEscapeString(Buf, Len, RawCP, Result)
 end;
 
 { TZDbcPooledConnectionDriver }
@@ -793,11 +820,8 @@ var
 begin
   Result := nil;
 
-  TempURL := TZURL.Create;
+  TempURL := TZURL.Create(GetEmbeddedURL(URL.URL), URL.Properties);
   try
-    TempURL.URL := GetEmbeddedURL(URL.URL);
-    TempURL.Properties.Text := URL.Properties.Text;
-
     ConnectionPool := nil;
 
 { TODO

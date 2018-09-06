@@ -55,24 +55,21 @@ interface
 
 {$I ZDbc.inc}
 
-{$IFDEF ENABLE_OLEDB}
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, ActiveX,
-  {$ifdef WITH_SYSTEM_PREFIX}System.Win.ComObj,{$else}ComObj,{$endif}
+  {$IFDEF WITH_UNIT_NAMESPACES}System.Win.ComObj{$ELSE}ComObj{$ENDIF},
   ZDbcIntfs, ZDbcConnection, ZDbcLogging, ZTokenizer,
   ZGenericSqlAnalyser, ZURL, ZCompatibility, ZDbcOleDBUtils,
   ZOleDB, ZPlainOleDBDriver, ZOleDBToken;
 
 type
   {** Implements OleDB Database Driver. }
-  {$WARNINGS OFF}
   TZOleDBDriver = class(TZAbstractDriver)
   public
     constructor Create; override;
     function Connect(const Url: TZURL): IZConnection; override;
     function GetTokenizer: IZTokenizer; override;
   end;
-  {$WARNINGS ON}
 
   {** Defines a PostgreSQL specific connection. }
   IZOleDBConnection = interface(IZConnection)
@@ -81,11 +78,10 @@ type
     function CreateCommand: ICommandText;
     function GetMalloc: IMalloc;
     function SupportsMARSConnection: Boolean;
-    procedure UnRegisterPendingStatement(const Value: IZStatement);
   end;
 
   {** Implements a generic OleDB Connection. }
-  TZOleDBConnection = class(TZAbstractConnection, IZOleDBConnection)
+  TZOleDBConnection = class(TZAbstractDbcConnection, IZOleDBConnection)
   private
     FMalloc: IMalloc;
     FDBInitialize: IDBInitialize;
@@ -94,7 +90,6 @@ type
     FpulTransactionLevel: ULONG;
     FSupportsMARSConnnection: Boolean;
     FServerProvider: TZServerProvider;
-    fPendingStmts: TList; //weak reference to pending stmts
     fTransaction: ITransactionLocal;
     fCatalog: String;
     procedure StopTransaction;
@@ -102,7 +97,6 @@ type
   protected
     procedure StartTransaction;
     procedure InternalCreate; override;
-    procedure RegisterPendingStatement(const Value: IZStatement);
     function OleDbGetDBPropValue(const APropIDs: array of DBPROPID): string; overload;
     function OleDbGetDBPropValue(APropID: DBPROPID): Integer; overload;
   public
@@ -124,7 +118,7 @@ type
     procedure Rollback; override;
 
     procedure Open; override;
-    procedure Close; override;
+    procedure InternalClose; override;
 
     {procedure SetReadOnly(ReadOnly: Boolean); override; }
 
@@ -141,7 +135,6 @@ type
     function CreateCommand: ICommandText;
     function GetMalloc: IMalloc;
     function SupportsMARSConnection: Boolean;
-    procedure UnRegisterPendingStatement(const Value: IZStatement);
   end;
 
 var
@@ -187,12 +180,10 @@ end;
   @return a <code>Connection</code> object that represents a
     connection to the URL
 }
-{$WARNINGS OFF}
 function TZOleDBDriver.Connect(const Url: TZURL): IZConnection;
 begin
   Result := TZOleDBConnection.Create(Url);
 end;
-{$WARNINGS ON}
 
 {**
   Gets a SQL syntax tokenizer.
@@ -226,13 +217,12 @@ procedure TZOleDBConnection.InternalCreate;
 begin
   CoInit;
   OleCheck(CoGetMalloc(1,fMalloc));
-  fPendingStmts := TList.Create;
   FMetadata := TOleDBDatabaseMetadata.Create(Self, URL);
   FRetaining := False; //not StrToBoolEx(URL.Properties.Values['hard_commit']);
   CheckCharEncoding('CP_UTF16');
   fTransaction := nil;
   Inherited SetAutoCommit(True);
-  Open;
+  //Open;
 end;
 
 {**
@@ -245,7 +235,6 @@ begin
   finally
     FDBCreateCommand := nil;
     fDBInitialize := nil;
-    fPendingStmts.Free;
     fMalloc := nil;
     CoUninit;
   end;
@@ -309,7 +298,7 @@ end;
 procedure TZOleDBConnection.SetProviderProps(DBinit: Boolean);
 const
   DBPROPSET_SQLSERVERDBINIT:      TGUID = '{5cf4ca10-ef21-11d0-97e7-00c04fc2ad98}';
-  {%H-}DBPROPSET_SQLSERVERDATASOURCE:  TGUID = '{28efaee4-2d2c-11d1-9807-00c04fc2ad98}';
+  //{%H-}DBPROPSET_SQLSERVERDATASOURCE:  TGUID = '{28efaee4-2d2c-11d1-9807-00c04fc2ad98}'; unused
   SSPROP_INIT_PACKETSIZE	       = 9;
 var
   DBProps: IDBProperties;
@@ -394,6 +383,7 @@ var
   rgDBPROPSET_DBPROPSET_SESSION: TDBProp;
   prgPropertySets: TDBPROPSET;
   SessionProperties: ISessionProperties;
+  Res: HResult;
 begin
   if (not Closed) and Self.GetMetadata.GetDatabaseInfo.SupportsTransactionIsolationLevel(TransactIsolationLevel) then
     if AutoCommit then begin
@@ -412,8 +402,14 @@ begin
       if not Assigned(fTransaction) and
          Succeeded(FDBCreateCommand.QueryInterface(IID_ITransactionLocal,fTransaction)) then
       begin
-        fTransaction.StartTransaction(TIL[TransactIsolationLevel],0,nil,@FpulTransactionLevel);
-        DriverManager.LogMessage(lcExecute, ConSettings^.Protocol, 'Restart Transaction support');
+        Res := fTransaction.StartTransaction(TIL[TransactIsolationLevel],0,nil,@FpulTransactionLevel);
+        if DriverMAnager.HasLoggingListener then
+          DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'Restart Transaction support');
+        if not Succeeded(Res) then begin
+          Dec(FpulTransactionLevel);
+          fTransaction := nil;
+          OleDBCheck(Res);
+        end;
       end;
 end;
 
@@ -471,8 +467,6 @@ end;
 function TZOleDBConnection.GetBinaryEscapeString(const Value: TBytes): String;
 begin
   Result := GetSQLHexString(Pointer(Value), Length(Value), True);
-  if GetAutoEncodeStrings then
-    Result := GetDriver.GetTokenizer.GetEscapeString(Result)
 end;
 
 {**
@@ -484,8 +478,6 @@ end;
 function TZOleDBConnection.GetBinaryEscapeString(const Value: RawByteString): String;
 begin
   Result := GetSQLHexString(Pointer(Value), Length(Value), True);
-  if GetAutoEncodeStrings then
-    Result := GetDriver.GetTokenizer.GetEscapeString(Result)
 end;
 
 {**
@@ -547,12 +539,9 @@ end;
 }
 function TZOleDBConnection.CreatePreparedStatement(const SQL: string; Info: TStrings):
   IZPreparedStatement;
-var Stmt: TZOleDBPreparedStatement;
 begin
   if Closed then Open;
-  Stmt := TZOleDBPreparedStatement.Create(Self, SQL, Info);
-  RegisterPendingStatement(Stmt);
-  Result := Stmt;
+  Result := TZOleDBPreparedStatement.Create(Self, SQL, Info);
 end;
 
 {**
@@ -587,15 +576,6 @@ begin
   Result := FSupportsMARSConnnection;
 end;
 
-procedure TZOleDBConnection.UnRegisterPendingStatement(
-  const Value: IZStatement);
-var
-  I: Integer;
-begin
-  I := fPendingStmts.IndexOf(Pointer(Value));
-  if I > -1 then fPendingStmts.Delete(I);
-end;
-
 {**
   Sets a new transact isolation level.
   @param Level a new transact isolation level.
@@ -618,6 +598,8 @@ end;
 }
 procedure TZOleDBConnection.Commit;
 begin
+  if DriverManager.HasLoggingListener then
+    DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'COMMIT');
   if assigned(fTransaction) then
   begin
     OleDbCheck(fTransaction.Commit(FRetaining,XACTTC_SYNC,0));
@@ -628,7 +610,6 @@ begin
       StartTransaction;
     end;
   end;
-  DriverManager.LogMessage(lcExecute, ConSettings^.Protocol, 'COMMIT');
 end;
 
 {**
@@ -638,13 +619,10 @@ end;
   commit has been disabled.
   @see #setAutoCommit
 }
-procedure TZOleDBConnection.RegisterPendingStatement(const Value: IZStatement);
-begin
-  fPendingStmts.Add(Pointer(Value))
-end;
-
 procedure TZOleDBConnection.Rollback;
 begin
+  if DriverManager.HasLoggingListener then
+    DriverManager.LogMessage(lcTransaction, ConSettings^.Protocol, 'ROLLBACK');
   if (FpulTransactionLevel > 0) and assigned(fTransaction) then
   begin
     OleDbCheck(fTransaction.Abort(nil, FRetaining, False));
@@ -655,7 +633,6 @@ begin
       StartTransaction;
     end;
   end;
-  DriverManager.LogMessage(lcExecute, ConSettings^.Protocol, 'ROLLBACK');
 end;
 
 function TZOleDBConnection.OleDbGetDBPropValue(APropID: DBPROPID): Integer;
@@ -735,10 +712,10 @@ begin
     //some Providers do NOT support commands, so let's check if we can use it
     OleCheck(FDBCreateSession.CreateSession(nil, IID_IDBCreateCommand, IUnknown(FDBCreateCommand)));
     FDBCreateSession := nil; //no longer required!
-    (GetMetadata.GetDatabaseInfo as IZOleDBDatabaseInfo).InitilizePropertiesFromDBInfo(fDBInitialize, fMalloc);
     //if FServerProvider = spMSSQL then
       //SetProviderProps(False); //provider properties -> don't work??
     inherited Open;
+    (GetMetadata.GetDatabaseInfo as IZOleDBDatabaseInfo).InitilizePropertiesFromDBInfo(fDBInitialize, fMalloc);
     DriverManager.LogMessage(lcConnect, ConSettings^.Protocol,
       'CONNECT TO "'+ConSettings^.Database+'" AS USER "'+ConSettings^.User+'"');
     StartTransaction;
@@ -763,20 +740,17 @@ end;
   garbage collected. Certain fatal errors also result in a closed
   Connection.
 }
-procedure TZOleDBConnection.Close;
-var I: Integer;
+procedure TZOleDBConnection.InternalClose;
 begin
-  if not Closed then begin
-    for i := 0 to fPendingStmts.Count-1 do
-      (IZStatement(fPendingStmts[i])).Close;
-    StopTransaction;
-    FDBCreateCommand := nil;
-    OleDBCheck(fDBInitialize.Uninitialize);
-    fDBInitialize := nil;
-    DriverManager.LogMessage(lcDisconnect, ConSettings^.Protocol,
-      'DISCONNECT FROM "'+ConSettings^.Database+'"');
-    inherited Close;
-  end;
+  if Closed or not Assigned(fDBInitialize) then
+    Exit;
+
+  StopTransaction;
+  FDBCreateCommand := nil;
+  OleDBCheck(fDBInitialize.Uninitialize);
+  fDBInitialize := nil;
+  DriverManager.LogMessage(lcDisconnect, ConSettings^.Protocol,
+    'DISCONNECT FROM "'+ConSettings^.Database+'"');
 end;
 
 initialization
@@ -786,9 +760,4 @@ finalization
   if DriverManager <> nil then
     DriverManager.DeregisterDriver(OleDBDriver);
   OleDBDriver := nil;
-//(*
-{$ELSE !ENABLE_OLEDB}
-implementation
-{$ENDIF ENABLE_OLEDB}
-//*)
 end.

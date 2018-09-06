@@ -54,7 +54,7 @@ unit ZDbcOleDBStatement;
 interface
 
 {$I ZDbc.inc}
-{$IFDEF ENABLE_OLEDB}
+
 {$IFDEF WIN64}
 {$ALIGN 8}
 {$ELSE}
@@ -64,7 +64,7 @@ interface
 
 uses
   Types, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils, ActiveX,
-  ZCompatibility, {$IFDEF OLD_FPC}ZClasses, {$ENDIF} ZSysUtils, ZOleDB,
+  ZCompatibility, ZSysUtils, ZOleDB,
   ZDbcOleDBUtils, ZDbcIntfs, ZDbcStatement, ZVariant;
 
 type
@@ -133,9 +133,10 @@ type
 implementation
 
 uses
-  Variants, ComObj, Math,
+  Variants, Math,
+  {$IFDEF WITH_UNIT_NAMESPACES}System.Win.ComObj{$ELSE}ComObj{$ENDIF},
   ZDbcOleDB, ZDbcOleDBResultSet, ZEncoding, ZDbcLogging,
-  ZFastCode, ZDbcMetadata, ZDbcUtils, ZMessages;
+  ZFastCode, ZDbcMetadata, ZDbcUtils, ZMessages, ZClasses;
 
 { TZOleDBPreparedStatement }
 
@@ -158,7 +159,6 @@ end;
 
 destructor TZOleDBPreparedStatement.Destroy;
 begin
-  (Connection as IZOleDBConnection).UnRegisterPendingStatement(Self);
   inherited Destroy;
   FCommand := nil;
 end;
@@ -247,14 +247,16 @@ begin
         InitOleParamDBBindings(DescripedDBPARAMINFO, InParamTypes, InParamValues, ClientVarManager);
         FParamInfoArray := Pointer(DescripedDBPARAMINFO);
       end;
-      Assert(FDBUPARAMS = Cardinal(InParamCount), SInvalidInputParameterCount);
+      if FDBUPARAMS <> Cardinal(InParamCount) then
+        raise EZSQLException.Create(SInvalidInputParameterCount);
       if FDBUPARAMS > 0 then begin
         OleCheck(FCommand.QueryInterface(IID_IAccessor, FParameterAccessor));
         SetLength(FDBBINDSTATUSArray, FDBUPARAMS);
         FRowSize := PrepareOleParamDBBindings(FDBUPARAMS, FDBBindingArray,
           InParamTypes, FParamInfoArray, FTempLobs);
         CalcParamSetsAndBufferSize;
-        Assert(FDBParams.hAccessor = 1, 'Accessor handle should be unique!');
+        if not (FDBParams.hAccessor = 1) then
+          raise EZSQLException.Create('Accessor handle should be unique!');
       end else begin
         { init ! }
         FDBParams.pData := nil;
@@ -548,13 +550,14 @@ begin
       if FMultipleResults <> nil then
       repeat
         FRowSet := nil;
-        Status := FMultipleResults.GetResult(nil, DBRESULTFLAG(DBRESULTFLAG_ROWSET),
+        Status := FMultipleResults.GetResult(nil, DBRESULTFLAG(DBRESULTFLAG_DEFAULT),
           IID_IRowset, @FRowsAffected, @FRowSet);
-      until (FRowSet = nil) or (Status = DB_S_NORESULT);
-      FMultipleResults := nil;
-      (FCommand as ICommandPrepare).UnPrepare;
-      FCommand := nil;
+        //Status := FMultipleResults.GetResult(nil, DBRESULTFLAG(DBRESULTFLAG_DEFAULT),
+          //IID_IRowset, @FRowsAffected, @FRowSet);
+      until Failed(Status) or (Status = DB_S_NORESULT);
+      {OleDBCheck}((FCommand as ICommandPrepare).UnPrepare);
     finally
+      FCommand := nil;
       FMultipleResults := nil;
     end;
   end;
@@ -563,8 +566,7 @@ end;
 procedure TZOleDBPreparedStatement.SetDataArray(ParameterIndex: Integer;
   const Value; const SQLType: TZSQLType; const VariantType: TZVariantType = vtNull);
 begin
-  if ParameterIndex = FirstDbcIndex then
-  begin
+  if ParameterIndex = FirstDbcIndex then begin
     FArrayOffSet := 0;
     FDBParams.cParamSets := 0;
   end;
@@ -577,13 +579,4 @@ begin
   fMoreResultsIndicator := Value;
 end;
 
-//(*
-{$ELSE !ENABLE_OLEDB}
-implementation
-{$ENDIF ENABLE_OLEDB}
-//*)
 end.
-
-
-
-

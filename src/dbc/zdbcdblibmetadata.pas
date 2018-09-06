@@ -57,15 +57,22 @@ interface
 
 uses
   Types, Classes, SysUtils, ZSysUtils, ZDbcIntfs, ZDbcMetadata,
-  ZCompatibility;
+  ZCompatibility, ZSelectSchema;
 
 type
 
+   IZDbLibDatabaseInfo = Interface(IZDataBaseInfo)
+     ['{A99F9433-6A2F-40C8-9D15-96FE5632654E}']
+     procedure InitIdentifierCase(const Collation: String);
+   End;
   // technobot 2008-06-25 - methods moved as is from TZDbLibBaseDatabaseMetadata:
   {** Implements MsSql Database Information. }
-  TZDbLibDatabaseInfo = class(TZAbstractDatabaseInfo)
+  TZDbLibDatabaseInfo = class(TZAbstractDatabaseInfo, IZDbLibDatabaseInfo)
+  private
+    fCaseIdentifiers: TZIdentifierCase;
   public
-
+    procedure InitIdentifierCase(const Collation: String);
+  public
     // database/driver/server info:
     function GetDatabaseProductName: string; override;
     function GetDatabaseProductVersion: string; override;
@@ -375,7 +382,7 @@ end;
 }
 function TZDbLibDatabaseInfo.SupportsMixedCaseIdentifiers: Boolean;
 begin
-  Result := False;
+  Result := fCaseIdentifiers in [icMixed,icSpecial];
 end;
 
 {**
@@ -385,7 +392,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresUpperCaseIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := False
 end;
 
 {**
@@ -395,7 +402,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresLowerCaseIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := false;
 end;
 
 {**
@@ -405,7 +412,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresMixedCaseIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := fCaseIdentifiers in [icMixed, icSpecial];
 end;
 
 {**
@@ -426,7 +433,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresUpperCaseQuotedIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := False;
 end;
 
 {**
@@ -436,7 +443,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresLowerCaseQuotedIdentifiers: Boolean;
 begin
-  Result := True;
+  Result := False;
 end;
 
 {**
@@ -457,7 +464,7 @@ end;
 function TZDbLibDatabaseInfo.GetSQLKeywords: string;
 begin
   { TODO -ofjanos -cAPI : SQL Keywords that are not SQL92 compliant }
-  Result := '';
+  Result := inherited GetSQLKeywords;
 end;
 
 {**
@@ -507,6 +514,15 @@ end;
 function TZDbLibDatabaseInfo.GetTimeDateFunctions: string;
 begin
   Result := 'DATEADD,DATEDIFF,DATENAME,DATEPART,DAY,GETDATE,MONTH,YEAR';
+end;
+
+procedure TZDbLibDatabaseInfo.InitIdentifierCase(const Collation: String);
+begin
+  if ZFastCode.Pos('_CI_', Collation) > 0
+  then fCaseIdentifiers := icLower
+  else if (ZFastCode.Pos('_BIN', Collation) > 0){SQLServer} or (ZFastCode.Pos('bin_', Collation) > 0) {Sybase}
+  then fCaseIdentifiers := icSpecial
+  else fCaseIdentifiers := icMixed;
 end;
 
 {**
@@ -1203,11 +1219,11 @@ begin
 end;
 
 {**
-  Composes a object name, AnsiQuotedStr or NullText
+  Composes a object name, SQLQuotedStror NullText
   @param S the object string
   @param NullText the "NULL"-Text default: 'null'
   @param QuoteChar the QuoteChar default: '
-  @return 'null' if S is '' or S if s is already Quoted or AnsiQuotedStr(S, #39)
+  @return 'null' if S is '' or S if s is already Quoted or SQLQuotedStr(S, #39)
 }
 function TZDbLibBaseDatabaseMetadata.ComposeObjectString(const S: String;
   Const NullText: String = 'null'; QuoteChar: Char = #39): String;
@@ -1217,27 +1233,21 @@ begin
   else begin
     Result := ConvertEscapes(S);
     if not IC.IsQuoted(Result) then
-      Result := AnsiQuotedStr(Result, QuoteChar);
+      Result := SQLQuotedStr(Result, QuoteChar);
   end;
 end;
 
 {**
-  Decomposes a object name, AnsiQuotedStr or NullText
+  Decomposes a object name, SQLQuotedStr or NullText
   @param S the object string
-  @return 'null' if S is '' or S if s is already Quoted or AnsiQuotedStr(S, #39)
+  @return 'null' if S is '' or S if s is already Quoted or SQLQuotedStr(S, #39)
 }
 function TZDbLibBaseDatabaseMetadata.DecomposeObjectString(const S: String): String;
 begin
   if S = '' then
     Result := 'null'
   else
-  begin
-    if IC.IsQuoted(Result) then
-      Result := IC.ExtractQuote(S)
-    else
-      Result := S;
-    Result := AnsiQuotedStr(Result, #39);
-  end;
+    Result := SQLQuotedStr(Inherited DecomposeObjectString(S), #39);
 end;
 
 function TZDbLibBaseDatabaseMetadata.ConvertEscapes(const Pattern: String): String;
@@ -1613,14 +1623,10 @@ begin
 
     TableTypes := '';
     for I := 0 to Length(Types) - 1 do
-    begin
-      if Length(TableTypes) > 0 then
-        TableTypes := TableTypes + ',';
-      TableTypes := TableTypes + AnsiQuotedStr(Types[I], '''');
-    end;
+      AppendSepString(TableTypes, SQLQuotedStr(Types[I], ''''), ',');
     if TableTypes = '' then
       TableTypes := 'null'
-    else TableTypes := AnsiQuotedStr(TableTypes, '"');
+    else TableTypes := SQLQuotedStr(TableTypes, '"');
 
     with GetStatement.ExecuteQuery(
       Format('exec sp_tables %s, %s, %s, %s',
@@ -1787,8 +1793,7 @@ function TZMsSqlDatabaseMetadata.UncachedGetColumns(const Catalog: string;
   const ColumnNamePattern: string): IZResultSet;
 var
   SQLType: TZSQLType;
-  default_val: String;
-  TableName, tmp: String;
+  tmp: String;
   ResultHasRows: Boolean;
 begin
   ResultHasRows := False;
@@ -1805,7 +1810,9 @@ begin
       Result.UpdateString(CatalogNameIndex, GetStringByName('TABLE_QUALIFIER'));
       Result.UpdateString(SchemaNameIndex, GetStringByName('TABLE_OWNER'));
       Result.UpdateString(TableNameIndex, GetStringByName('TABLE_NAME'));
-      Result.UpdateString(ColumnNameIndex, GetStringByName('COLUMN_NAME'));
+      tmp := GetStringByName('COLUMN_NAME');
+      Result.UpdateString(ColumnNameIndex, tmp);
+      Result.UpdateBoolean(TableColColumnCaseSensitiveIndex, IC.IsCaseSensitive(tmp));
       //The value in the resultset will be used
       SQLType := ConvertODBCToSqlType(GetSmallByName('DATA_TYPE'), ConSettings.CPType);
       tmp := UpperCase(GetStringByName('TYPE_NAME'));
@@ -1832,14 +1839,14 @@ begin
       else
         Result.UpdateSmall(TableColColumnNullableIndex, Ord(ntNullableUnknown));
       Result.UpdateString(TableColColumnRemarksIndex, GetStringByName('REMARKS'));
-      if (GetConnection as IZDBLibConnection).FreeTDS then
+      //if (GetConnection as IZDBLibConnection).GetProvider = dpSybase then
         Result.UpdateString(TableColColumnColDefIndex, GetStringByName('COLUMN_DEF'))
-      else //MSSQL bizarity: defaults are double braked '((value))' or braked and quoted '(''value'')'
+      {else //MSSQL bizarity: defaults are double braked '((value))' or braked and quoted '(''value'')'
       begin
         default_val := GetStringByName('COLUMN_DEF');
         if default_val <> '' then
-          Result.UpdateString(TableColColumnColDefIndex, Copy(default_val, 2, Length(default_val)-2));
-      end;
+          Result.UpdateString(TableColColumnColDefIndex, Copy(default_val, 3, Length(default_val)-4));
+      end};
       Result.UpdateSmall(TableColColumnSQLDataTypeIndex, GetSmallByName('SQL_DATA_TYPE'));
       Result.UpdateSmall(TableColColumnSQLDateTimeSubIndex, GetSmallByName('SQL_DATETIME_SUB'));
       Result.UpdateInt(TableColColumnCharOctetLengthIndex, GetIntByName('CHAR_OCTET_LENGTH'));
@@ -1855,7 +1862,6 @@ begin
   end;
 
   if ResultHasRows then begin
-    TableName := Result.GetString(TableNameIndex);
 
     // hint by Jan: I am not sure wether this statement still works with SQL Server 2000 or before.
     Result.BeforeFirst;
@@ -1875,7 +1881,6 @@ begin
       begin
         Result.Next;
         Result.UpdateBoolean(TableColColumnAutoIncIndex, (GetSmallByName('status') and $80) <> 0);
-        //Result.UpdateNull(TableColColumnCaseSensitiveIndex);
         Result.UpdateBoolean(TableColColumnSearchableIndex,
           Result.GetBoolean(TableColColumnSearchableIndex) and (GetIntByName('iscomputed') = 0));
         Result.UpdateBoolean(TableColColumnWritableIndex,
@@ -2661,7 +2666,7 @@ begin
   with GetStatement.ExecuteQuery(
     Format('select c.* from syscolumns c inner join sysobjects o on'
     + ' (o.id = c.id) where o.name = %s and c.number = %s order by colid',
-    [AnsiQuotedStr(ProcNamePart, ''''), NumberPart])) do
+    [SQLQuotedStr(ProcNamePart, ''''), NumberPart])) do
   begin
     Result.Next;//Skip return parameter
     while Next do
@@ -2728,11 +2733,7 @@ begin
 
   TableTypes := '';
   for I := 0 to Length(Types) - 1 do
-  begin
-    if TableTypes <> '' then
-      TableTypes := TableTypes + ',';
-    TableTypes := TableTypes + AnsiQuotedStr(Types[I], '''');
-  end;
+    AppendSepString(TableTypes, SQLQuotedStr(Types[I], ''''), ',');
 
   StatementResult := GetStatement.ExecuteQuery(Format('exec sp_jdbc_tables %s, %s, %s, %s',
     [ComposeObjectString(TableNamePattern), ComposeObjectString(SchemaPattern), ComposeObjectString(Catalog), ComposeObjectString(TableTypes)]));
@@ -2914,8 +2915,8 @@ begin
       Result.UpdateString(TableNameIndex, GetStringByName('TABLE_NAME'));
       Result.UpdateString(ColumnNameIndex, GetStringByName('COLUMN_NAME'));
 //The value in the resultset will be used
-//      Result.UpdateSmall(TableColColumnTypeIndex,
-//        Ord(ConvertODBCToSqlType(GetSmallByName('DATA_TYPE'))));
+      Result.UpdateSmall(TableColColumnTypeIndex,
+        Ord(ConvertODBCToSqlType(GetSmallByName('DATA_TYPE'), ConSettings.CPType)));
       Result.UpdateString(TableColColumnTypeNameIndex, GetStringByName('TYPE_NAME'));
       Result.UpdateInt(TableColColumnSizeIndex, GetIntByName('COLUMN_SIZE'));
       Result.UpdateInt(TableColColumnBufLengthIndex, GetIntByName('BUFFER_LENGTH'));
@@ -2929,6 +2930,7 @@ begin
       Result.UpdateInt(TableColColumnCharOctetLengthIndex, GetIntByName('CHAR_OCTET_LENGTH'));
       Result.UpdateInt(TableColColumnOrdPosIndex, GetIntByName('ORDINAL_POSITION'));
       Result.UpdateString(TableColColumnIsNullableIndex, GetStringByName('IS_NULLABLE'));
+      Result.UpdateBoolean(TableColColumnCaseSensitiveIndex, IC.GetIdentifierCase(GetStringByName('TYPE_NAME'), True) in [icMixed, icSpecial]);
       Result.InsertRow;
     end;
     Close;
@@ -2943,7 +2945,6 @@ begin
     begin
       Result.Next;
       Result.UpdateBoolean(TableColColumnAutoIncIndex, (GetSmallByName('status') and $80) <> 0);
-      //Result.UpdateNull(TableColColumnCaseSensitiveIndex);
       Result.UpdateBoolean(TableColColumnSearchableIndex, not (GetSmallByName('type') in [34, 35]));
       Result.UpdateBoolean(TableColColumnWritableIndex, ((GetSmallByName('status') and $80) = 0)
         (*and (GetSmallByName('type') <> 37)*));   // <<<< *DEBUG WARUM?
@@ -3651,8 +3652,8 @@ var
 begin
   Result:=inherited UncachedGetIndexInfo(Catalog, Schema, Table, Unique, Approximate);
 
-  Is_Unique := AnsiQuotedStr(BoolStrInts[Unique], '''');
-  Accuracy := AnsiQuotedStr(BoolStrInts[Approximate], '''');
+  Is_Unique := SQLQuotedStr(BoolStrInts[Unique], '''');
+  Accuracy := SQLQuotedStr(BoolStrInts[Approximate], '''');
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getindexinfo %s, %s, %s, %s, %s',
@@ -3726,11 +3727,7 @@ begin
 
   UDTypes := '';
   for I := 0 to Length(Types) - 1 do
-  begin
-    if Length(UDTypes) > 0 then
-      UDTypes := UDTypes + ',';
-    UDTypes := UDTypes + AnsiQuotedStr(ZFastCode.IntToStr(Types[I]), '''');
-  end;
+    AppendSepString(UDTypes, SQLQuotedStr(ZFastCode.IntToStr(Types[I]), ''''), ',');
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getudts %s, %s, %s, %s',

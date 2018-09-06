@@ -86,7 +86,7 @@ type
 
   TZAbstractODBCStatement = class(TZAbstractPreparedStatement, IZODBCStatement)
   private
-    fPlainDriver: IODBC3BasePlainDriver;
+    fPlainDriver: TZODBC3PlainDriver;
     fPHDBC: PSQLHDBC;
     fHSTMT: SQLHSTMT;
     fParamInfos: array of TZODBCParamInfo;
@@ -114,8 +114,8 @@ type
     procedure UnPrepareInParameters; override;
     function SupportsSingleColumnArrays: Boolean; override;
   public
-    constructor Create(const Connection: IZODBCConnection; var ConnectionHandle: SQLHDBC; const SQL: string; Info: TStrings);
-    destructor Destroy; override;
+    constructor Create(const Connection: IZODBCConnection;
+      var ConnectionHandle: SQLHDBC; const SQL: string; Info: TStrings);
 
     function ExecuteQueryPrepared: IZResultSet; override;
     function ExecuteUpdatePrepared: Integer; override;
@@ -124,8 +124,9 @@ type
     procedure Prepare; override;
     procedure Unprepare; override;
     procedure Close; override;
+    procedure Cancel; override;
 
-    procedure SetNullArray(ParameterIndex: Integer; const SQLType: TZSQLType; const Value; const VariantType: TZVariantType = vtNull); override;
+
     procedure SetDataArray(ParameterIndex: Integer; const Value;
       const SQLType: TZSQLType; const VariantType: TZVariantType = vtNull); override;
 
@@ -153,7 +154,7 @@ implementation
 
 uses Math, DateUtils,
   ZSysUtils, ZMessages, ZEncoding, ZDbcUtils, ZDbcResultSet, ZFastCode, ZDbcLogging,
-  ZDbcODBCUtils, ZDbcODBCResultSet, ZDbcCachedResultSet, ZDbcGenericResolver;
+  ZDbcODBCUtils, ZDbcODBCResultSet, ZDbcCachedResultSet, ZDbcGenericResolver, ZClasses;
 
 const
   NullInd: array[Boolean] of SQLLEN = (SQL_NO_NULLS, SQL_NULL_DATA);
@@ -203,12 +204,28 @@ begin
           InternalBindParams;
           InternalExecute;
           Inc(FArrayOffSet, fMaxBufArrayBound);
-          CheckStmtError(fPlainDriver.RowCount(fHSTMT, @RowCount));
+          CheckStmtError(fPlainDriver.SQLRowCount(fHSTMT, @RowCount));
           LastUpdateCount := LastUpdateCount + RowCount;
         end
       end
     end;
   inherited BindInParameters;
+end;
+
+{**
+  Cancels this <code>Statement</code> object if both the DBMS and
+  driver support aborting an SQL statement.
+  This method can be used by one thread to cancel a statement that
+  is being executed by another thread.
+}
+procedure TZAbstractODBCStatement.Cancel;
+var RetCode: SQLRETURN;
+begin
+  if fHSTMT <> nil then begin
+    RetCode := FPlainDriver.SQLCancel(fHSTMT);
+    if RETCODE <> SQL_SUCCESS then
+      CheckODBCError(RETCODE, fHSTMT, SQL_HANDLE_STMT, Connection as IZODBCConnection);
+  end;
 end;
 
 procedure TZAbstractODBCStatement.CheckStmtError(RETCODE: SQLRETURN);
@@ -228,7 +245,7 @@ procedure TZAbstractODBCStatement.Close;
 begin
   inherited Close;
   if Assigned(fHSTMT) then begin
-    fPlainDriver.FreeHandle(SQL_HANDLE_STMT, fHSTMT);
+    fPlainDriver.SQLFreeHandle(SQL_HANDLE_STMT, fHSTMT);
     fHSTMT := nil;
   end;
 end;
@@ -238,7 +255,7 @@ constructor TZAbstractODBCStatement.Create(const Connection: IZODBCConnection;
 begin
   inherited Create(Connection, SQL, Info);
   //inherited Create(Connection, Connection.NativeSQL(SQL), Info);
-  fPlainDriver := Connection.GetPlainDriver;
+  fPlainDriver := TZODBC3PlainDriver(Connection.GetPlainDriver.GetInstance);
   fStreamSupport := Connection.ODBCVersion >= {%H-}Word(SQL_OV_ODBC3_80);
   fPHDBC := @ConnectionHandle;
   FZBufferSize := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'internal_buffer_size', ''), 131072); //by default 128KB
@@ -246,12 +263,6 @@ begin
   fStmtTimeOut := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'StatementTimeOut', ''), SQL_QUERY_TIMEOUT_DEFAULT); //execution timeout in seconds by default 1
   fMoreResultsIndicator := TZMoreResultsIndicator(Ord(not Connection.GetMetadata.GetDatabaseInfo.SupportsMultipleResultSets));
   fBindRowWise := False;
-end;
-
-destructor TZAbstractODBCStatement.Destroy;
-begin
-  (Connection as IZODBCConnection).UnRegisterPendingStatement(Self);
-  inherited Destroy;
 end;
 
 function TZAbstractODBCStatement.ExecutePrepared: Boolean;
@@ -266,9 +277,9 @@ begin
   BindInParameters;
   try
     InternalExecute;
-    CheckStmtError(fPlainDriver.RowCount(fHSTMT, @RowCount));
+    CheckStmtError(fPlainDriver.SQLRowCount(fHSTMT, @RowCount));
     LastUpdateCount := LastUpdateCount + RowCount;
-    CheckStmtError(fPlainDriver.NumResultCols(fHSTMT, @ColumnCount));
+    CheckStmtError(fPlainDriver.SQLNumResultCols(fHSTMT, @ColumnCount));
     if ColumnCount > 0 then begin
       LastUpdateCount := -1;
       LastResultSet := GetCurrentResultSet;
@@ -276,10 +287,10 @@ begin
       if Connection.GetMetadata.GetDatabaseInfo.SupportsMultipleResultSets and
          (fMoreResultsIndicator <> mriHasNoMoreResults) then
         repeat
-          RETCODE := fPlainDriver.MoreResults(fHSTMT);
+          RETCODE := fPlainDriver.SQLMoreResults(fHSTMT);
           if RETCODE = SQL_SUCCESS then begin
             fMoreResultsIndicator := mriHasMoreResults;
-            CheckStmtError(fPlainDriver.NumResultCols(fHSTMT, @ColumnCount));
+            CheckStmtError(fPlainDriver.SQLNumResultCols(fHSTMT, @ColumnCount));
             if ColumnCount > 0 then
               LastResultSet := GetCurrentResultSet;
           end else if RETCODE = SQL_NO_DATA then begin
@@ -305,7 +316,7 @@ begin
   BindInParameters;
   try
     InternalExecute;
-    CheckStmtError(fPlainDriver.NumResultCols(fHSTMT, @ColumnCount));
+    CheckStmtError(fPlainDriver.SQLNumResultCols(fHSTMT, @ColumnCount));
     if ColumnCount > 0 then
       if Assigned(FOpenResultSet) then
         Result := IZResultSet(FOpenResultSet)
@@ -317,10 +328,10 @@ begin
         (fMoreResultsIndicator <> mriHasNoMoreResults) then
       begin
         repeat
-          RETCODE := fPlainDriver.MoreResults(fHSTMT);
+          RETCODE := fPlainDriver.SQLMoreResults(fHSTMT);
           if RETCODE = SQL_SUCCESS then begin
             fMoreResultsIndicator := mriHasMoreResults;
-            CheckStmtError(fPlainDriver.NumResultCols(fHSTMT, @ColumnCount));
+            CheckStmtError(fPlainDriver.SQLNumResultCols(fHSTMT, @ColumnCount));
             if ColumnCount > 0 then
               Result := GetCurrentResultSet
           end else if RETCODE = SQL_NO_DATA then begin
@@ -349,7 +360,7 @@ begin
   LastUpdateCount := 0;
   try
     InternalExecute;
-    CheckStmtError(fPlainDriver.RowCount(fHSTMT, @RowCount));
+    CheckStmtError(fPlainDriver.SQLRowCount(fHSTMT, @RowCount));
     LastUpdateCount := LastUpdateCount + RowCount;
     Result := RowCount;
   finally
@@ -387,12 +398,13 @@ end;
 procedure TZAbstractODBCStatement.InternalBeforePrepare;
 begin
   if not Assigned(fHSTMT) then begin
-    CheckODBCError(fPlainDriver.AllocHandle(SQL_HANDLE_STMT, fPHDBC^, fHSTMT), fPHDBC^, SQL_HANDLE_DBC, Connection as IZODBCConnection);
-    CheckStmtError(fPlainDriver.SetStmtAttr(fHSTMT, SQL_ATTR_QUERY_TIMEOUT, {%H-}Pointer(fStmtTimeOut), 0));
+    CheckODBCError(fPlainDriver.SQLAllocHandle(SQL_HANDLE_STMT, fPHDBC^, fHSTMT), fPHDBC^, SQL_HANDLE_DBC, Connection as IZODBCConnection);
+    CheckStmtError(fPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_ATTR_QUERY_TIMEOUT, SQLPOINTER(fStmtTimeOut), 0));
     fMoreResultsIndicator := mriUnknown;
   end;
 end;
 
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 procedure TZAbstractODBCStatement.InternalBindParams;
 var
   I, J: SQLUSMALLINT;
@@ -421,9 +433,13 @@ var
   ZExtendedArray: TExtendedDynArray absolute ZData;
   ZDateTimeArray: TDateTimeDynArray absolute ZData;
   ZRawByteStringArray: TRawByteStringDynArray absolute ZData;
+  {$IFNDEF NO_ANSISTRING}
   ZAnsiStringArray: TAnsiStringDynArray absolute ZData;
+  {$ENDIF}
   ZUTF8StringArray: TUTF8StringDynArray absolute ZData;
+  {$IFNDEF NO_UTF8STRING}
   ZStringArray: TStringDynArray absolute ZData;
+  {$ENDIF}
   ZUnicodeStringArray: TUnicodeStringDynArray absolute ZData;
   ZCharRecArray: TZCharRecDynArray absolute ZData;
   ZBytesArray: TBytesDynArray absolute ZData;
@@ -526,7 +542,7 @@ var
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
-  procedure SetDouble(d: Double); overload;
+  procedure SetDouble(const d: Double); overload;
   begin
     PDouble(ParameterDataPtr)^ := D;
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
@@ -548,18 +564,18 @@ var
   begin
     PSQLLEN(StrLen_or_IndPtr)^ := Len;
     if Assigned(P) then
-      Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
-  procedure SetDate(D: TDateTime);
+  procedure SetDate(const D: TDateTime);
   begin
     DecodeDate(D, Year, PSQL_DATE_STRUCT(ParameterDataPtr)^.month, PSQL_DATE_STRUCT(ParameterDataPtr)^.day);
     PSQL_DATE_STRUCT(ParameterDataPtr)^.year := year;
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
-  procedure SetTime(D: TDateTime);
+  procedure SetTime(const D: TDateTime);
   begin
     if Param.C_DataType = SQL_C_BINARY then begin
       //https://bytes.com/topic/sql-server/answers/851494-sql-state-22003-numeric-value-out-range-time-data-type
@@ -574,7 +590,7 @@ var
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
-  procedure SetTimeStamp(D: TDateTime);
+  procedure SetTimeStamp(const D: TDateTime);
   begin
     DecodeDateTime(D, Year, PSQL_TIMESTAMP_STRUCT(ParameterDataPtr)^.month, PSQL_TIMESTAMP_STRUCT(ParameterDataPtr)^.day,
       PSQL_TIMESTAMP_STRUCT(ParameterDataPtr)^.hour, PSQL_TIMESTAMP_STRUCT(ParameterDataPtr)^.minute, PSQL_TIMESTAMP_STRUCT(ParameterDataPtr)^.second, fraction);
@@ -589,8 +605,8 @@ var
   begin
     PSQLLEN(StrLen_or_IndPtr)^ := Min(Param.BufferSize-2, Len shl 1);
     if Assigned(P) then
-      Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
-    (PWideChar(ParameterDataPtr)+(PSQLLEN(StrLen_or_IndPtr)^ shr 1))^ := #0;
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
+    PWord(PWideChar(ParameterDataPtr)+(PSQLLEN(StrLen_or_IndPtr)^ shr 1))^ := Ord(#0);
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
@@ -602,8 +618,8 @@ var
   begin
     PSQLLEN(StrLen_or_IndPtr)^ := Min(Param.BufferSize-1, Len);
     if Assigned(P) then
-      Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
-    (PAnsiChar(ParameterDataPtr)+PSQLLEN(StrLen_or_IndPtr)^)^ := #0;
+      {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
+    PByte(PAnsiChar(ParameterDataPtr)+PSQLLEN(StrLen_or_IndPtr)^)^ := Ord(#0);
     Inc(PAnsiChar(ParameterDataPtr), ParameterDataOffSet);
     Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
   end;
@@ -697,9 +713,85 @@ begin
             end;
             Param.ValueCount := fCurrentIterations;
             if Assigned(Value.VArray.VIsNullArray) then
-              for J := fArrayOffSet to fCurrentIterations -1 do begin
-                PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TBooleanDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]];
-                Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+              case TZSQLType(Value.VArray.VIsNullArrayType) of
+                stBoolean: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TBooleanDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stByte: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TByteDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stShort: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TShortIntDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stWord: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TWordDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stSmall: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TSmallIntDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stInteger: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TIntegerDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stLongWord: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TLongwordDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stLong: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TInt64DynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stULong: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TUInt64DynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stFloat: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TSingleDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stDouble: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TDoubleDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stBigDecimal: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TExtendedDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stTime, stDate, stTimeStamp: for J := fArrayOffSet to fCurrentIterations -1 do begin
+                    PSQLLEN(StrLen_or_IndPtr)^ := NullInd[TDateTimeDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet]<>0];
+                    Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                  end;
+                stString, stUnicodeString:
+                    case Value.VArray.VIsNullArrayVariantType of
+                      {$IFNDEF UNICODE}vtString, {$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString, {$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String, {$ENDIF}
+                      vtRawByteString:
+                        for J := fArrayOffSet to fCurrentIterations -1 do begin
+                          PSQLLEN(StrLen_or_IndPtr)^ := NullInd[StrToBoolEx(TRawByteStringDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet])];
+                          Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                        end;
+                      {$IFDEF UNICODE} vtString, {$ENDIF}
+                      vtUnicodeString:
+                        for J := fArrayOffSet to fCurrentIterations -1 do begin
+                          PSQLLEN(StrLen_or_IndPtr)^ := NullInd[StrToBoolEx(TUnicodeStringDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet])];
+                          Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                        end;
+                      vtCharRec:
+                        for J := fArrayOffSet to fCurrentIterations -1 do begin
+                          if ZCompatibleCodePages(TZCharRecDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet].CP, zCP_UTF16)
+                          then PSQLLEN(StrLen_or_IndPtr)^ := NullInd[StrToBoolEx(PWideChar(TZCharRecDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet].P))]
+                          else PSQLLEN(StrLen_or_IndPtr)^ := NullInd[StrToBoolEx(PAnsiChar(TZCharRecDynArray(Value.VArray.VIsNullArray)[J+fArrayOffSet].P))];
+                          Inc(PAnsiChar(StrLen_or_IndPtr), SizeOf(SQLLEN));
+                        end;
+                      else
+                        raise EZSQLException.Create(sUnsupportedOperation);
+                    end;
               end
             else if Assigned(Value.VArray.VArray) then
               FillChar(StrLen_or_IndPtr^, fCurrentIterations*SizeOf(SQLLEN), #0) { fast not null indcator.. }
@@ -739,11 +831,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetByte(Ord(StrToBoolEx(ZRawByteStringArray[J+fArrayOffSet])));
                       {$IFDEF UNICODE}
                       vtString,
@@ -786,11 +876,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetByte(RawToIntDef(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -833,11 +921,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetShort(RawToIntDef(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -880,15 +966,11 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case InParamValues[i].VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString, {$ENDIF}
+                      {$IFNDEF NO_ANSISTRING} vtAnsiString, {$ENDIF}
+                      {$IFNDEF NO_UTF8STRING} vtUTF8String, {$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetWord(RawToIntDef(ZRawByteStringArray[J+fArrayOffSet], 0));
-                      {$IFDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
+                      {$IFDEF UNICODE} vtString, {$ENDIF}
                       vtUnicodeString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetWord(UnicodeToIntDef(ZUnicodeStringArray[J+fArrayOffSet], 0));
                       vtCharRec:        for J := 0 to fCurrentIterations -1 do if IsNotNull then
                                           if ZCompatibleCodePages(ZCharRecArray[J+fArrayOffSet].CP, zCP_UTF16) then
@@ -927,11 +1009,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetSmall(RawToIntDef(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -974,11 +1054,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetCardinal(RawToUInt64Def(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -1021,11 +1099,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetInteger(RawToIntDef(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -1068,11 +1144,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetUInt64(RawToUInt64Def(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -1115,11 +1189,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}
-                      vtString,
-                      {$ENDIF}
-                      vtAnsiString,
-                      vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do If IsNotNull then SetUInt64(RawToInt64Def(ZRawByteStringArray[J+fArrayOffSet], 0));
                       {$IFDEF UNICODE}
                       vtString,
@@ -1161,8 +1233,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}vtString, {$ENDIF}
-                      vtAnsiString, vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetSingle(PAnsiChar(Pointer(ZRawByteStringArray[J+fArrayOffSet])), Length(ZRawByteStringArray[J+fArrayOffSet]));
                       {$IFDEF UNICODE}vtString, {$ENDIF}
                       vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetSingle(PWideChar(Pointer(ZUnicodeStringArray[J+fArrayOffSet])), Length(ZUnicodeStringArray[J+fArrayOffSet]));
@@ -1202,8 +1275,9 @@ begin
                   //stGUID:
                   stString, stUnicodeString:
                     case Value.VArray.VArrayVariantType of
-                      {$IFNDEF UNICODE}vtString,{$ENDIF}
-                      vtAnsiString, vtUTF8String,
+                      {$IFNDEF UNICODE} vtString,{$ENDIF}
+                      {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                      {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                       vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetDouble(PAnsiChar(Pointer(ZRawByteStringArray[J+fArrayOffSet])), Length(ZRawByteStringArray[J+fArrayOffSet]));
                       {$IFDEF UNICODE}vtString,{$ENDIF}
                       vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetDouble(PWidechar(Pointer(ZUnicodeStringArray[J+fArrayOffSet])), Length(ZUnicodeStringArray[J+fArrayOffSet]));
@@ -1235,11 +1309,9 @@ begin
                     stGUID:         for J := 0 to fCurrentIterations -1 do if IsNotNull then SetBinary(@ZGUIDArray[J+fArrayOffSet].D1, 16);
                     stString, stUnicodeString: begin
                         case InParamValues[i].VArray.VArrayVariantType of
-                          {$IFNDEF UNICODE}
-                          vtString,
-                          {$ENDIF}
-                          vtAnsiString,
-                          vtUTF8String,
+                          {$IFNDEF UNICODE} vtString,{$ENDIF}
+                          {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                          {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                           vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then begin
                                               GUID := StringToGUID({$IFDEF UNICODE}ASCII7ToUnicodeString{$ENDIF}(ZRawByteStringArray[J+fArrayOffSet]));
                                               SetBinary(@GUID.D1, 16);
@@ -1272,11 +1344,9 @@ begin
                   stGUID:         for J := 0 to fCurrentIterations -1 do if IsNotNull then SetBinary(@ZGUIDArray[J+fArrayOffSet].D1, Min(16, Param.BufferSize));
                   stString:
                       case InParamValues[i].VArray.VArrayVariantType of
-                        {$IFNDEF UNICODE}
-                        vtString,
-                        {$ENDIF}
-                        vtAnsiString,
-                        vtUTF8String,
+                        {$IFNDEF UNICODE} vtString,{$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetBinary(Pointer(ZRawByteStringArray[J+fArrayOffSet]), Min(Length(ZRawByteStringArray[J+fArrayOffSet]), Param.BufferSize));
                         {$IFDEF UNICODE}
                         vtString,
@@ -1314,11 +1384,9 @@ begin
                     stBigDecimal: for J := 0 to fCurrentIterations -1 do if IsNotNull then SetDate(ZExtendedArray[J+fArrayOffSet]);
                     stString, stUnicodeString:
                       case InParamValues[i].VArray.VArrayVariantType of
-                        {$IFNDEF UNICODE}
-                        vtString,
-                        {$ENDIF}
-                        vtAnsiString,
-                        vtUTF8String,
+                        {$IFNDEF UNICODE} vtString,{$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetDate(ClientVarManager.GetAsDateTime(EncodeRawByteString(ZRawByteStringArray[J+fArrayOffSet])));
                         {$IFDEF UNICODE}
                         vtString,
@@ -1352,11 +1420,9 @@ begin
                     stBigDecimal: for J := 0 to fCurrentIterations -1 do if IsNotNull then SetTime(ZExtendedArray[J+fArrayOffSet]);
                     stString, stUnicodeString:
                       case InParamValues[i].VArray.VArrayVariantType of
-                        {$IFNDEF UNICODE}
-                        vtString,
-                        {$ENDIF}
-                        vtAnsiString,
-                        vtUTF8String,
+                        {$IFNDEF UNICODE} vtString,{$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetTime(ClientVarManager.GetAsDateTime(EncodeRawByteString(ZRawByteStringArray[J+fArrayOffSet])));
                         {$IFDEF UNICODE}
                         vtString,
@@ -1390,11 +1456,9 @@ begin
                     stBigDecimal: for J := 0 to fCurrentIterations -1 do if IsNotNull then SetTimeStamp(ZExtendedArray[J+fArrayOffSet]);
                     stString, stUnicodeString:
                       case InParamValues[i].VArray.VArrayVariantType of
-                        {$IFNDEF UNICODE}
-                        vtString,
-                        {$ENDIF}
-                        vtAnsiString,
-                        vtUTF8String,
+                        {$IFNDEF UNICODE} vtString,{$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}vtAnsiString,{$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}vtUTF8String,{$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetTimeStamp(ClientVarManager.GetAsDateTime(EncodeRawByteString(ZRawByteStringArray[J+fArrayOffSet])));
                         {$IFDEF UNICODE}
                         vtString,
@@ -1438,7 +1502,10 @@ begin
                           {$ELSE}
                           for J := 0 to fCurrentIterations -1 do if IsNotNull then SetUnicode(ConSettings^.ConvFuncs.ZStringToUnicode(ZStringArray[J+fArrayOffSet], ConSettings^.CTRL_CP));
                           {$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}
                         vtAnsiString:     for J := 0 to fCurrentIterations -1 do if IsNotNull then SetUnicode(PRawToUnicode(Pointer(ZAnsiStringArray[J+fArrayOffSet]), Length(ZAnsiStringArray[J+fArrayOffSet]), ZOSCodePage));
+                        {$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}
                         vtUTF8String:     for J := 0 to fCurrentIterations -1 do if IsNotNull then
                           if Assigned(Pointer(ZUTF8StringArray[J+fArrayOffSet])) and (Length(ZUTF8StringArray[J+fArrayOffSet]) <= Param.ColumnSize) then begin
                             PSQLLEN(StrLen_or_IndPtr)^ := UTF8ToWideChar(Pointer(ZUTF8StringArray[J+fArrayOffSet]), Length(ZUTF8StringArray[J+fArrayOffSet]), ParameterDataPtr) shl 1;
@@ -1447,6 +1514,7 @@ begin
                             Inc(PAnsiChar(StrLen_or_IndPtr), StrLen_or_IndOffSet);
                           end else
                             SetUnicode(PRawToUnicode(Pointer(ZUTF8StringArray[J+fArrayOffSet]), Length(ZUTF8StringArray[J+fArrayOffSet]), zCP_UTF8));
+                        {$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetUnicode(ConSettings.ConvFuncs.ZRawToUnicode(ZRawByteStringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
                         vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetUnicode(ZUnicodeStringArray[J+fArrayOffSet]);
                         vtCharRec:        for J := 0 to fCurrentIterations -1 do if IsNotNull then
@@ -1493,8 +1561,12 @@ begin
                     stString, stUnicodeString:
                       case InParamValues[i].VArray.VArrayVariantType of
                         vtString:         for J := 0 to fCurrentIterations -1 do if IsNotNull then SetRaw(ConSettings^.ConvFuncs.ZStringToRaw(ZStringArray[J+fArrayOffSet], ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP));
+                        {$IFNDEF NO_ANSISTRING}
                         vtAnsiString:     for J := 0 to fCurrentIterations -1 do if IsNotNull then SetRaw(ConSettings^.ConvFuncs.ZStringToRaw(ZStringArray[J+fArrayOffSet], ZOSCodePage, ConSettings^.ClientCodePage^.CP));
+                        {$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}
                         vtUTF8String:     for J := 0 to fCurrentIterations -1 do if IsNotNull then SetRaw(ConSettings^.ConvFuncs.ZUTF8ToRaw(ZUTF8StringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
+                        {$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetRaw(ZRawByteStringArray[J+fArrayOffSet]);
                         vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if IsNotNull then SetRaw(ConSettings^.ConvFuncs.ZUnicodeToRaw(ZUnicodeStringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
                         vtCharRec: for J := 0 to fCurrentIterations -1 do if IsNotNull then
@@ -1558,8 +1630,12 @@ begin
                           {$ELSE}
                           for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetCLobFromUnicode(ConSettings^.ConvFuncs.ZStringToUnicode(ZStringArray[J+fArrayOffSet], ConSettings^.CTRL_CP));
                           {$ENDIF}
+                        {$IFNDEF NO_ANSISTRING}
                         vtAnsiString:     for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetCLobFromUnicode(PRawToUnicode(Pointer(ZAnsiStringArray[J+fArrayOffSet]), Length(ZAnsiStringArray[J+fArrayOffSet]), ZOSCodePage));
+                        {$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}
                         vtUTF8String:     for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetCLobFromUnicode(PRawToUnicode(Pointer(ZUTF8StringArray[J+fArrayOffSet]), Length(ZUTF8StringArray[J+fArrayOffSet]), zCP_UTF8));
+                        {$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetCLobFromUnicode(ConSettings.ConvFuncs.ZRawToUnicode(ZRawByteStringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
                         vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetCLobFromUnicode(ZUnicodeStringArray[J+fArrayOffSet]);
                         vtCharRec:        for J := 0 to fCurrentIterations -1 do if LobIsNotNull then
@@ -1606,8 +1682,12 @@ begin
                     stString, stUnicodeString:
                       case InParamValues[i].VArray.VArrayVariantType of
                         vtString:         for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetClobFromRaw(ConSettings^.ConvFuncs.ZStringToRaw(ZStringArray[J+fArrayOffSet], ConSettings^.CTRL_CP, ConSettings^.ClientCodePage^.CP));
+                        {$IFNDEF NO_ANSISTRING}
                         vtAnsiString:     for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetClobFromRaw(ConSettings^.ConvFuncs.ZStringToRaw(ZStringArray[J+fArrayOffSet], ZOSCodePage, ConSettings^.ClientCodePage^.CP));
+                        {$ENDIF}
+                        {$IFNDEF NO_UTF8STRING}
                         vtUTF8String:     for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetClobFromRaw(ConSettings^.ConvFuncs.ZUTF8ToRaw(ZUTF8StringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
+                        {$ENDIF}
                         vtRawByteString:  for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetClobFromRaw(ZRawByteStringArray[J+fArrayOffSet]);
                         vtUnicodeString:  for J := 0 to fCurrentIterations -1 do if LobIsNotNull then SetClobFromRaw(ConSettings^.ConvFuncs.ZUnicodeToRaw(ZUnicodeStringArray[J+fArrayOffSet], ConSettings^.ClientCodePage^.CP));
                         vtCharRec: for J := 0 to fCurrentIterations -1 do if LobIsNotNull then
@@ -1726,16 +1806,18 @@ begin
                   if Param.InputDataType = SQL_PARAM_INPUT then
                     Param.CurrParamDataPtr := CharRec.P
                   else
-                    System.Move(CharRec.P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
-                  (PWideChar(Param.CurrParamDataPtr)+(PSQLLEN(StrLen_or_IndPtr)^ shr 1))^ := #0; //set a terminating #0 to top of data
+                    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(CharRec.P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
+                  if not ((PWideChar(Param.CurrParamDataPtr)+(PSQLLEN(StrLen_or_IndPtr)^ shr 1))^ = WideChar(#0)) then //WideChar use for FPC else dead slow
+                    (PWideChar(Param.CurrParamDataPtr)+(PSQLLEN(StrLen_or_IndPtr)^ shr 1))^ := WideChar(#0); //set a terminating #0 to top of data
                 end else begin
                   CharRec := ClientVarManager.GetAsCharRec(InParamValues[i], ConSettings^.ClientCodePage^.CP);
                   PSQLLEN(StrLen_or_IndPtr)^ := {%H-}Min((Param.ColumnSize*ConSettings^.ClientCodePage^.CharWidth), CharRec.Len);
                   if Param.InputDataType = SQL_PARAM_INPUT then
                     Param.CurrParamDataPtr := CharRec.P
                   else
-                    System.Move(CharRec.P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
-                  (PAnsiChar(Param.CurrParamDataPtr)+PSQLLEN(StrLen_or_IndPtr)^)^ := #0; //terminate the String if a truncation happens
+                    {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(CharRec.P^, ParameterDataPtr^, PSQLLEN(StrLen_or_IndPtr)^);
+                  if not (PByte(PAnsiChar(Param.CurrParamDataPtr)+PSQLLEN(StrLen_or_IndPtr)^)^ = Ord(#0)) then
+                    PByte(PAnsiChar(Param.CurrParamDataPtr)+PSQLLEN(StrLen_or_IndPtr)^)^ := Ord(#0); //terminate the String if a truncation happens
                 end;
                 Inc(PAnsiChar(ParameterDataPtr), Param.BufferSize);
               end;
@@ -1857,7 +1939,7 @@ begin
       end;
       if (Param.CurrParamDataPtr <> Param.LastParamDataPtr) or
          (Param.CurrStrLen_or_IndPtr <> Param.LastStrLen_or_IndPtr) then begin //..Bindings remain in effect until the application calls SQLBindParameter again...oslt.
-        CheckStmtError(fPlainDriver.BindParameter(fHSTMT, I+1,//0=bookmark and Params do starts with 1
+        CheckStmtError(fPlainDriver.SQLBindParameter(fHSTMT, I+1,//0=bookmark and Params do starts with 1
           Param.InputDataType, Param.C_DataType, Param.DataType, Param.ColumnSize, Param.DecimalDigits * Ord(Param.SQLType in [stDouble, stTime, stTimeStamp]),
             Param.CurrParamDataPtr, Param.BufferSize, Param.CurrStrLen_or_IndPtr));
         Param.LastParamDataPtr := Param.CurrParamDataPtr;
@@ -1865,12 +1947,12 @@ begin
       end;
     end;
     if ParamSetChanged then
-      if (fMaxBufArrayBound = -1) then
-        CheckStmtError(fPlainDriver.SetStmtAttr(fHSTMT, SQL_ATTR_PARAMSET_SIZE, Pointer(1), 0))
-      else
-        CheckStmtError(fPlainDriver.SetStmtAttr(fHSTMT, SQL_ATTR_PARAMSET_SIZE, {%H-}Pointer(NativeUInt(fCurrentIterations)), 0));
+      if (fMaxBufArrayBound = -1)
+      then CheckStmtError(fPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_ATTR_PARAMSET_SIZE, Pointer(1), 0))
+      else CheckStmtError(fPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_ATTR_PARAMSET_SIZE, SQLPOINTER(NativeUInt(fCurrentIterations)), 0));
   end;
 end;
+{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
 
 procedure TZAbstractODBCStatement.InternalExecute;
 var
@@ -1882,38 +1964,40 @@ var
   PRowIndex: PInteger;
   I: Integer;
 begin
-  CheckStmtError(fPlainDriver.FreeStmt(fHSTMT,SQL_CLOSE)); //handle a get data issue
-  RETCODE := fPlainDriver.Execute(fHSTMT);
+  CheckStmtError(fPlainDriver.SQLFreeStmt(fHSTMT,SQL_CLOSE)); //handle a get data issue
+  RETCODE := fPlainDriver.SQLExecute(fHSTMT);
   while RETCODE = SQL_NEED_DATA do begin
-    RETCODE := fPlainDriver.ParamData(fHSTMT, @ValuePtr);
+    RETCODE := fPlainDriver.SQLParamData(fHSTMT, @ValuePtr);
     if RetCode <> SQL_NEED_DATA then break;
     Assert(Assigned(ValuePtr), 'wrong descriptor token');
     PRowIndex := {%H-}Pointer({%H-}NativeUInt(ValuePtr)+LobArrayIndexOffSet);
-    TempBlob := PLobArray(PPointer(ValuePtr)^)[PRowIndex^] as IZBlob; //note ValuePtr is a user defined token we also could use the columnNumber on binding the column -> this is faster
+    {$R-}
+    TempBlob := PLobArray(PPointer(ValuePtr)^)^[PRowIndex^] as IZBlob; //note ValuePtr is a user defined token we also could use the columnNumber on binding the column -> this is faster
+    {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
     if (TempBlob = nil) or TempBlob.IsEmpty then begin
-      CheckStmtError(fPlainDriver.PutData(fHSTMT, nil, SQL_NULL_DATA)); //set to null
+      CheckStmtError(fPlainDriver.SQLPutData(fHSTMT, nil, SQL_NULL_DATA)); //set to null
     end else begin
       Buf := TempBlob.GetBuffer;
       { put data chunked }
       StrLen_or_Ind := Min(ChunkSize, TempBlob.Length);
       for i := 1 to TempBlob.Length div ChunkSize do begin
-        CheckStmtError(fPlainDriver.PutData(fHSTMT, Buf, StrLen_or_Ind));
+        CheckStmtError(fPlainDriver.SQLPutData(fHSTMT, Buf, StrLen_or_Ind));
         Inc(Buf, ChunkSize);
       end;
       StrLen_or_Ind := TempBlob.Length - NativeInt(({%H-}NativeUInt(Buf)-{%H-}NativeUInt(TempBlob.GetBuffer)));
-      CheckStmtError(fPlainDriver.PutData(fHSTMT, Buf, StrLen_or_Ind)); //final chunk
+      CheckStmtError(fPlainDriver.SQLPutData(fHSTMT, Buf, StrLen_or_Ind)); //final chunk
     end;
     inc(PRowIndex^);
   end;
   { roll back PRowIndex^ misses yet}
   if RETCODE = SQL_PARAM_DATA_AVAILABLE then begin //check output params ...
-    RETCODE2 := fPlainDriver.MoreResults(fHSTMT);
+    RETCODE2 := fPlainDriver.SQLMoreResults(fHSTMT);
     if RETCODE2 = SQL_NO_DATA then
       //???
     else begin
       { get data chunked }
       CheckStmtError(RETCODE2);
-      CheckStmtError(fPlainDriver.ParamData(fHSTMT, @ValuePtr));
+      CheckStmtError(fPlainDriver.SQLParamData(fHSTMT, @ValuePtr));
       Assert(Assigned(ValuePtr), 'wrong descriptor pointer');
       TempBlob := IZBlob(ValuePtr);
     end;
@@ -1925,7 +2009,7 @@ procedure TZAbstractODBCStatement.Prepare;
 begin
   if not Prepared then begin
     if Connection.GetServerProvider = spMSSQL then
-      CheckStmtError(FPlainDriver.SetStmtAttr(fHSTMT, SQL_SOPT_SS_CURSOR_OPTIONS, Pointer(SQL_CO_FFO),0));
+      CheckStmtError(FPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_SOPT_SS_CURSOR_OPTIONS, Pointer(SQL_CO_FFO),0));
     inherited Prepare;
   end;
 end;
@@ -1937,7 +2021,7 @@ var
   NoLobBoundParamCount: Integer;
   AllParamsAreArrays: Boolean;
 begin
-  CheckStmtError(fPlainDriver.NumParams(fHSTMT, @ParameterCount));
+  CheckStmtError(fPlainDriver.SQLNumParams(fHSTMT, @ParameterCount));
   if ParameterCount > 0 then begin
     if ParameterCount <> InParamCount then
       raise EZSQLException.Create(SInvalidInputParameterCount);
@@ -1946,7 +2030,7 @@ begin
     fBufferSize := 0;
     AllParamsAreArrays := False;
     for ParameterNumber := 0 to ParameterCount-1 do begin
-      CheckStmtError(fPlainDriver.DescribeParam(fHSTMT, ParameterNumber +1, //0=bookmark and Params do starts with 1
+      CheckStmtError(fPlainDriver.SQLDescribeParam(fHSTMT, ParameterNumber +1, //0=bookmark and Params do starts with 1
         @fParamInfos[ParameterNumber].DataType, @fParamInfos[ParameterNumber].ColumnSize,
         @fParamInfos[ParameterNumber].DecimalDigits, @fParamInfos[ParameterNumber].Nullable));
       //get "best" TZSQLType -> ODBC does not returns the C-Data types
@@ -1965,7 +2049,7 @@ begin
          (not (InParamTypes[ParameterNumber] in [stAsciiStream, stUnicodeStream, stBinaryStream]))));
       //note: Code is prepared to handle any case of Param-Directions  except fetching returned data
       fParamInfos[ParameterNumber].InputDataType := ParamTypeToODBCParamType(pctIn, fParamInfos[ParameterNumber].SQLType, fStreamSupport);
-      fParamInfos[ParameterNumber].BufferSize := CalcBufSize(fParamInfos[ParameterNumber].ColumnSize,
+      fParamInfos[ParameterNumber].BufferSize := CalcBufSize(fParamInfos[ParameterNumber].ColumnSize * Ord(not (fParamInfos[ParameterNumber].SQLType in [stAsciiStream, stUnicodeStream, stBinaryStream])),
         fParamInfos[ParameterNumber].C_DataType, fParamInfos[ParameterNumber].SQLType, ConSettings^.ClientCodePage);
       if fParamInfos[ParameterNumber].SQLType = stTimeStamp then begin
         fParamInfos[ParameterNumber].ColumnSize := 23;
@@ -1982,10 +2066,9 @@ begin
       fMaxBufArrayBound := Max(1, fZBufferSize div fBufferSize)
     else
       fMaxBufArrayBound := -1;
-    if fBindRowWise then
-      CheckStmtError(fPlainDriver.SetStmtAttr(fHSTMT, SQL_ATTR_PARAM_BIND_TYPE, {%H-}Pointer(fBufferSize), 0))
-    else
-      CheckStmtError(fPlainDriver.SetStmtAttr(fHSTMT, SQL_ATTR_PARAM_BIND_TYPE, Pointer(SQL_PARAM_BIND_BY_COLUMN), 0));
+    if fBindRowWise
+    then CheckStmtError(fPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_ATTR_PARAM_BIND_TYPE, SQLPOINTER(fBufferSize), 0))
+    else CheckStmtError(fPlainDriver.SQLSetStmtAttr(fHSTMT, SQL_ATTR_PARAM_BIND_TYPE, Pointer(SQL_PARAM_BIND_BY_COLUMN), 0));
   end;
 end;
 
@@ -2024,15 +2107,6 @@ begin
   fMoreResultsIndicator := Value;
 end;
 
-procedure TZAbstractODBCStatement.SetNullArray(ParameterIndex: Integer;
-  const SQLType: TZSQLType; const Value; const VariantType: TZVariantType);
-begin
-  if Assigned(Pointer(Value)) and (SQLType <> stBoolean) then
-    raise EZSQLException.Create('Unsupported Null-Indicator Array: supported is stBoolean')
-  else
-    inherited SetNullArray(ParameterIndex, SQLType, Value, VariantType);
-end;
-
 function TZAbstractODBCStatement.SupportsSingleColumnArrays: Boolean;
 begin
   Result := (GetConnection as IZODBCConnection).GetArraySelectSupported;
@@ -2041,9 +2115,8 @@ end;
 procedure TZAbstractODBCStatement.Unprepare;
 begin
   inherited Unprepare;
-  if Assigned(fHSTMT) then
-  begin
-    CheckStmtError(fPlainDriver.FreeHandle(SQL_HANDLE_STMT, fHSTMT)); //<- does the trick to get a instance reused
+  if Assigned(fHSTMT) then begin
+    CheckStmtError(fPlainDriver.SQLFreeHandle(SQL_HANDLE_STMT, fHSTMT)); //<- does the trick to get a instance reused
     fHSTMT := nil;
   end;
 end;
@@ -2053,7 +2126,7 @@ begin
   SetLength(fParamInfos, 0);
   SetLength(fBatchLobBuf, 0);
   if Assigned(fHSTMT) and Assigned(fPHDBC^) then
-    CheckStmtError(fPlainDriver.FreeStmt(fHSTMT,SQL_RESET_PARAMS));
+    CheckStmtError(fPlainDriver.SQLFreeStmt(fHSTMT,SQL_RESET_PARAMS));
 end;
 
 { TZODBCPreparedStatementW }
@@ -2068,11 +2141,11 @@ procedure TZODBCPreparedStatementW.Prepare;
 begin
   if Not Prepared then begin
     InternalBeforePrepare;
-    CheckStmtError((fPlainDriver as IODBC3UnicodePlainDriver).Prepare(fHSTMT, Pointer(WSQL), Length(WSQL)));
+    CheckStmtError(TODBC3UnicodePlainDriver(fPlainDriver).SQLPrepareW(fHSTMT, Pointer(WSQL), Length(WSQL)));
     inherited Prepare;
   end else
     if Assigned(fHSTMT) and Assigned(fPHDBC^) then
-      CheckStmtError(fPlainDriver.FreeStmt(fHSTMT,SQL_CLOSE));
+      CheckStmtError(fPlainDriver.SQLFreeStmt(fHSTMT,SQL_CLOSE));
 end;
 
 { TZODBCPreparedStatementA }
@@ -2087,11 +2160,11 @@ procedure TZODBCPreparedStatementA.Prepare;
 begin
   if Not Prepared then begin
     InternalBeforePrepare;
-    CheckStmtError((fPlainDriver as IODBC3RawPlainDriver).Prepare(fHSTMT, Pointer(ASQL), Length(ASQL)));
+    CheckStmtError(TODBC3RawPlainDriver(fPlainDriver).SQLPrepare(fHSTMT, Pointer(ASQL), Length(ASQL)));
     inherited Prepare;
   end else
     if Assigned(fHSTMT) and Assigned(fPHDBC^) then
-      CheckStmtError(fPlainDriver.FreeStmt(fHSTMT,SQL_CLOSE));
+      CheckStmtError(fPlainDriver.SQLFreeStmt(fHSTMT,SQL_CLOSE));
 end;
 
 end.

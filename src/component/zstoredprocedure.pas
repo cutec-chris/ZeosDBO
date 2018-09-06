@@ -98,7 +98,7 @@ type
 
     procedure FirstResultSet;
     procedure PreviousResultSet;
-    procedure NextResultSet;
+    function NextResultSet: Boolean; override;
     procedure LastResultSet;
     procedure SetResultSet(const Index: Integer);
     function ResultSetCount: Integer;
@@ -129,9 +129,6 @@ uses
   @param Properties a statement specific properties.
   @returns a created DBC statement.
 }
-{$IFDEF FPC}
-  {$HINTS OFF}
-{$ENDIF}
 function TZStoredProc.CreateStatement(const SQL: string; Properties: TStrings):
   IZPreparedStatement;
 var
@@ -172,9 +169,6 @@ begin
   end;
   Result := CallableStatement;
 end;
-{$IFDEF FPC}
-  {$HINTS ON}
-{$ENDIF}
 
 {**
   Fill prepared statement with parameters.
@@ -183,9 +177,6 @@ end;
   @param Params a collection of SQL parameters.
   @param DataLink a datalink to get parameters.
 }
-{$IFDEF FPC}
-  {$HINTS OFF}
-{$ENDIF}
 procedure TZStoredProc.SetStatementParams(const Statement: IZPreparedStatement;
   const ParamNames: TStringDynArray; Params: TParams; DataLink: TDataLink);
 var
@@ -202,9 +193,6 @@ begin
     SetStatementParam(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF}, Statement, Param);
   end;
 end;
-{$IFDEF FPC}
-  {$HINTS ON}
-{$ENDIF}
 
 {**
   Retrieves parameter values from callable statement.
@@ -283,7 +271,7 @@ begin
           Param.DataType := ftWideMemo;
         end;
         {$ENDIF}
-        ftBytes, ftVarBytes:
+        ftBytes, ftVarBytes, ftGuid:
           Param.Value := FCallableStatement.GetBytes(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF});
         ftDate:
           Param.AsDate := FCallableStatement.GetDate(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF});
@@ -310,8 +298,9 @@ end;
 procedure TZStoredProc.InternalOpen;
 begin
   inherited InternalOpen;
-
   RetrieveParamValues;
+  if Resultset.GetType <> rtForwardOnly then
+    Resultset.BeforeFirst;
 end;
 
 {**
@@ -327,9 +316,6 @@ begin
   Result := Trim(SQL.Text);
 end;
 
-{$IFDEF FPC}
-  {$HINTS OFF}
-{$ENDIF}
 procedure TZStoredProc.SetStoredProcName(const Value: string);
 var
   OldParams: TParams;
@@ -373,9 +359,6 @@ begin
     end;
   end;
 end;
-{$IFDEF FPC}
-  {$HINTS ON}
-{$ENDIF}
 
 procedure TZStoredProc.ExecProc;
 begin
@@ -396,7 +379,7 @@ end;
 procedure TZStoredProc.FirstResultSet;
 begin
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       SetAnotherResultset((Statement as IZCallableStatement).GetFirstResultSet);
 end;
 
@@ -406,18 +389,21 @@ end;
 procedure TZStoredProc.PreviousResultSet;
 begin
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       SetAnotherResultset((Statement as IZCallableStatement).GetPreviousResultSet);
 end;
 
 {**
   Procedure the Next retrieved resultset if the givens
 }
-procedure TZStoredProc.NextResultSet;
+function TZStoredProc.NextResultSet: Boolean;
 begin
+  Result := False;
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then begin
+      Result := True;
       SetAnotherResultset((Statement as IZCallableStatement).GetNextResultSet);
+    end;
 end;
 
 {**
@@ -426,7 +412,7 @@ end;
 procedure TZStoredProc.LastResultSet;
 begin
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       SetAnotherResultset((Statement as IZCallableStatement).GetLastResultSet);
 end;
 
@@ -452,7 +438,7 @@ function TZStoredProc.ResultSetCount: Integer;
 begin
   Result := 0;
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       Result := (Statement as IZCallableStatement).GetResultSetCount;
 end;
 
@@ -464,7 +450,7 @@ function TZStoredProc.BOR: Boolean;
 begin
   Result := True;
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       Result := (Statement as IZCallableStatement).BOR;
 end;
 
@@ -476,7 +462,7 @@ function TZStoredProc.EOR: Boolean;
 begin
   Result := True;
   if Assigned(Statement) then
-    if (Statement as IZCallableStatement).HasMoreResultSets then
+    if Statement.GetMoreResults then
       Result := (Statement as IZCallableStatement).EOR;
 end;
 

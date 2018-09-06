@@ -131,6 +131,15 @@ begin
 
   SQLStrings.Clear;
   CheckEquals(0, SQLStrings.ParamCount);
+
+  //see http://zeoslib.sourceforge.net/viewtopic.php?f=40&t=49966
+  SQLScript := 'select IsNull(B.X||B.y, '+QuotedStr('')+') as X_Y_Z from "My_Table" as B '+
+    'where 1=1 and :user_ID = B.x and ((B.nazwa iLike :nazwaFiltr) or (B.skrot iLike :nazwaFiltr))';
+  SQLStrings.Text := SQLScript;
+  CheckEquals(2, SQLStrings.ParamCount);
+  CheckEquals('user_ID', SQLStrings.ParamNames[0]);
+  CheckEquals('nazwaFiltr', SQLStrings.ParamNames[1]);
+  SQLStrings.Clear;
 end;
 
 {**
@@ -158,13 +167,13 @@ begin
   CheckEquals('NEW_ADDRESS', SQLStrings.ParamNames[2]);
   CheckEquals('NEW_NAME', SQLStrings.ParamNames[3]);
 
-  Try
+  try
     // Failure expected when ParamChar isn't seen as a Symbol by the Tokenizer
     // U is interpreted as the start of a normal word by all tokenizers
     SQLStrings.ParamChar := 'U';
     Fail('Wrong behaviour when setting ParamChar to U');
-    except
-      // Ignore.
+  except on E: Exception do
+    CheckNotTestFailure(E);
   end;
 end;
 

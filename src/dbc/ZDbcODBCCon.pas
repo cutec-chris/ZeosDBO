@@ -58,19 +58,17 @@ interface
 uses
   Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
   ZDbcIntfs, ZDbcConnection, ZTokenizer, ZGenericSqlAnalyser,
-  ZURL, ZCompatibility, ZPlainODBCDriver;
+  ZURL, ZCompatibility, ZPlainODBCDriver, ZClasses;
 
 
 type
   {** Implements OleDB Database Driver. }
-  {$WARNINGS OFF}
   TZODBCDriver = class(TZAbstractDriver)
   public
     constructor Create; override;
     function Connect(const Url: TZURL): IZConnection; override;
     function GetTokenizer: IZTokenizer; override;
   end;
-  {$WARNINGS ON}
 
   IZODBCConnection = Interface(IZConnection)
     ['{D149ABA3-AD8B-404F-A804-77608C596394}']
@@ -78,14 +76,13 @@ type
     function GetArrayRowSupported: Boolean;
     function GetArraySelectSupported: Boolean;
     function GetPlainDriver: IODBC3BasePlainDriver;
-    procedure UnRegisterPendingStatement(const Stmt: IZStatement);
     procedure SetLastWarning(Warning: EZSQLWarning);
     function ODBCVersion: SQLUSMALLINT;
   End;
 
-  TZAbstractODBCConnection = class(TZAbstractConnection, IZODBCConnection)
+  TZAbstractODBCConnection = class(TZAbstractDbcConnection, IZODBCConnection)
   private
-    fPlainDriver: IODBC3BasePlainDriver;
+    fPlainDriver: TZODBC3PlainDriver;
     fHDBC: SQLHDBC;
     fHENV: SQLHENV;
     fRetaining: Boolean;
@@ -93,13 +90,11 @@ type
     fCatalog: String; //cached
     fODBCVersion: SQLUSMALLINT;
     fArraySelectSupported, fArrayRowSupported: Boolean;
-    fPendingStmts: TList; //weak reference to pending stmts
     fServerProvider: TZServerProvider;
     procedure StopTransaction;
   protected
     procedure StartTransaction;
     procedure InternalCreate; override;
-    procedure RegisterPendingStatement(const Value: IZStatement);
   public
     function GetArrayRowSupported: Boolean;
     function GetArraySelectSupported: Boolean;
@@ -107,7 +102,6 @@ type
     procedure CheckDbcError(RETCODE: SQLRETURN); //{$IFDEF WITH_INLINE}inline; {$ENDIF}
     procedure SetLastWarning(Warning: EZSQLWarning);
     function ODBCVersion: Word;
-    procedure UnRegisterPendingStatement(const Value: IZStatement);
   public
     destructor Destroy; override;
 
@@ -128,7 +122,7 @@ type
     procedure Rollback; override;
 
     procedure Open; override;
-    procedure Close; override;
+    procedure InternalClose; override;
 
     function GetWarnings: EZSQLWarning; override;
     procedure ClearWarnings; override;
@@ -163,7 +157,8 @@ implementation
 uses
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   ZODBCToken, ZDbcODBCUtils, ZDbcODBCMetadata, ZDbcODBCStatement, ZDbcUtils,
-  ZPlainDriver, ZSysUtils, ZEncoding, ZFastCode, ZConnProperties, ZDbcProperties;
+  ZPlainDriver, ZSysUtils, ZEncoding, ZFastCode, ZConnProperties, ZDbcProperties,
+  ZMessages {$IFDEF NO_INLINE_SIZE_CHECK}, Math{$ENDIF};
 
 { TZODBCDriver }
 
@@ -187,7 +182,6 @@ uses
   @return a <code>Connection</code> object that represents a
     connection to the URL
 }
-{$WARNINGS OFF}
 function TZODBCDriver.Connect(const Url: TZURL): IZConnection;
 begin
   if Url.Protocol = 'odbc_w' then
@@ -195,7 +189,6 @@ begin
   else
     Result := TZODBCConnectionA.Create(URL)
 end;
-{$WARNINGS ON}
 
 {**
   Constructs this object with default properties.
@@ -243,21 +236,18 @@ end;
   garbage collected. Certain fatal errors also result in a closed
   Connection.
 }
-procedure TZAbstractODBCConnection.Close;
-var I: Integer;
+procedure TZAbstractODBCConnection.InternalClose;
 begin
-  if not Closed then begin
-    for i := 0 to fPendingStmts.Count-1 do
-      (IZStatement(fPendingStmts[i])).Close;
-    StopTransaction;
-    try
-      CheckDbcError(fPLainDriver.Disconnect(fHDBC));
-    finally
-      if Assigned(fHDBC) then begin
-        fPlainDriver.FreeHandle(SQL_HANDLE_DBC, fHDBC);
-        fHDBC := nil;
-      end;
-      inherited Close;
+  if Closed or not Assigned(fPLainDriver) then
+    Exit;
+  StopTransaction;
+  try
+    if fHDBC <> nil then
+      CheckDbcError(fPLainDriver.SQLDisconnect(fHDBC));
+  finally
+    if Assigned(fHDBC) then begin
+      fPlainDriver.SQLFreeHandle(SQL_HANDLE_DBC, fHDBC);
+      fHDBC := nil;
     end;
   end;
 end;
@@ -271,8 +261,10 @@ end;
 }
 procedure TZAbstractODBCConnection.Commit;
 begin
+  if GetAutoCommit then
+    raise Exception.Create(SInvalidOpInAutoCommit);
   if (not AutoCommit) and (not Closed) then
-    CheckDbcError(fPlainDriver.EndTran(SQL_HANDLE_DBC,fHDBC,SQL_COMMIT));
+    CheckDbcError(fPlainDriver.SQLEndTran(SQL_HANDLE_DBC,fHDBC,SQL_COMMIT));
 end;
 
 {**
@@ -291,11 +283,10 @@ end;
 }
 destructor TZAbstractODBCConnection.Destroy;
 begin
-  if Assigned(fHENV) then
-    fPlainDriver.FreeHandle(SQL_HANDLE_ENV, fHENV);
-  ClearWarnings;
   inherited Destroy;
-  FreeAndNil(fPendingStmts);
+  if Assigned(fHENV) then
+    fPlainDriver.SQLFreeHandle(SQL_HANDLE_ENV, fHENV);
+  ClearWarnings;
 end;
 
 {**
@@ -307,8 +298,6 @@ end;
 function TZAbstractODBCConnection.GetBinaryEscapeString(const Value: TBytes): String;
 begin
   Result := GetSQLHexString(Pointer(Value), Length(Value), True);
-  if GetAutoEncodeStrings then
-    Result := GetDriver.GetTokenizer.GetEscapeString(Result)
 end;
 
 function TZAbstractODBCConnection.GetArrayRowSupported: Boolean;
@@ -331,8 +320,6 @@ function TZAbstractODBCConnection.GetBinaryEscapeString(
   const Value: RawByteString): String;
 begin
   Result := GetSQLHexString(Pointer(Value), Length(Value), True);
-  if GetAutoEncodeStrings then
-    Result := GetDriver.GetTokenizer.GetEscapeString(Result)
 end;
 
 {**
@@ -372,8 +359,7 @@ var
   IPos, BytesPerChar, CodePage: Integer;
 label fail;
 begin
-  fPlainDriver := GetIZPlainDriver as IODBC3BasePlainDriver;
-  fPendingStmts := TList.Create;
+  fPlainDriver := TZODBC3PlainDriver(GetIZPlainDriver.GetInstance);
   fHENV := nil;
   fHDBC := nil;
   if Supports(fPlainDriver, IODBC3UnicodePlainDriver) then
@@ -381,13 +367,14 @@ begin
   else
     FMetaData := TODBCDatabaseMetadataA.Create(Self, Url, fHDBC);
   fCatalog := '';
-  Assert(SQL_SUCCEDED(fPlainDriver.AllocHandle(SQL_HANDLE_ENV, Pointer(SQL_NULL_HANDLE), fHENV)), 'Couldn''t allocate an Environment handle');
+  if not SQL_SUCCEDED(fPlainDriver.SQLAllocHandle(SQL_HANDLE_ENV, Pointer(SQL_NULL_HANDLE), fHENV)) then
+    raise EZSQLException.Create('Couldn''t allocate an Environment handle');
   //Try to SET Major Version 3 and minior Version 8
-  if SQL_SUCCEDED(fPlainDriver.SetEnvAttr(fHENV, SQL_ATTR_ODBC_VERSION, SQL_OV_ODBC3_80, 0)) then
+  if SQL_SUCCEDED(fPlainDriver.SQLSetEnvAttr(fHENV, SQL_ATTR_ODBC_VERSION, SQL_OV_ODBC3_80, 0)) then
     fODBCVersion := {%H-}Word(SQL_OV_ODBC3_80)
   else begin
     //set minimum Major Version 3
-    CheckODBCError(fPlainDriver.SetEnvAttr(fHENV, SQL_ATTR_ODBC_VERSION, SQL_OV_ODBC3, 0), fHENV, SQL_HANDLE_ENV, Self);
+    CheckODBCError(fPlainDriver.SQLSetEnvAttr(fHENV, SQL_ATTR_ODBC_VERSION, SQL_OV_ODBC3, 0), fHENV, SQL_HANDLE_ENV, Self);
     fODBCVersion := {%H-}Word(SQL_OV_ODBC3) * 100;
   end;
   if (Info.Values[ConnProps_Codepage] <> '') or (Info.Values[ConnProps_Charset] <> '') then begin
@@ -476,12 +463,12 @@ var
 begin
   if not Closed then
     Exit;
-  CheckODBCError(fPLainDriver.AllocHandle(SQL_HANDLE_DBC,fHENV,fHDBC),fHENV, SQL_HANDLE_ENV, Self);
+  CheckODBCError(fPLainDriver.SQLAllocHandle(SQL_HANDLE_DBC,fHENV,fHDBC),fHENV, SQL_HANDLE_ENV, Self);
   if Info.Values[ConnProps_Timeout] <> '' then
   begin
     TimeOut := {$IFDEF UNICODE}UnicodeToIntDef{$ELSE}RawToIntDef{$ENDIF}(Info.Values[ConnProps_Timeout],0);
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_CONNECTION_TIMEOUT, {%H-}Pointer(TimeOut), 0));
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_LOGIN_TIMEOUT, {%H-}Pointer(TimeOut), SQL_LOGIN_TIMEOUT_DEFAULT));
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_CONNECTION_TIMEOUT, SQLPOINTER(TimeOut), 0));
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_LOGIN_TIMEOUT, SQLPOINTER(TimeOut), SQL_LOGIN_TIMEOUT_DEFAULT));
   end;
 
   DriverCompletion := SQL_DRIVER_NOPROMPT;
@@ -506,13 +493,14 @@ begin
 
   SetLength(OutConnectString, 1024);
   try
-    CheckDbcError(fPLainDriver.DriverConnect(fHDBC, {$IFDEF MSWINDOWS}{%H-}Pointer(GetDesktopWindow){$ELSE}nil{$ENDIF},
+    CheckDbcError(fPLainDriver.SQLDriverConnect(fHDBC,
+      {$IFDEF MSWINDOWS}SQLHWND(GetDesktopWindow){$ELSE}nil{$ENDIF},
       Pointer(tmp), Length(tmp), Pointer(OutConnectString),
       Length(OutConnectString), @aLen, DriverCompletion));
     SetLength(OutConnectString, aLen);
-    CheckDbcError(fPlainDriver.GetInfo(fHDBC, SQL_PARAM_ARRAY_ROW_COUNTS, @InfoValue, SizeOf(SQLUINTEGER), nil));
+    CheckDbcError(fPlainDriver.SQLGetInfo(fHDBC, SQL_PARAM_ARRAY_SELECTS, @InfoValue, SizeOf(SQLUINTEGER), nil));
     fArraySelectSupported := InfoValue = SQL_PAS_BATCH;
-    CheckDbcError(fPlainDriver.GetInfo(fHDBC, SQL_PARAM_ARRAY_ROW_COUNTS, @InfoValue, SizeOf(SQLUINTEGER), nil));
+    CheckDbcError(fPlainDriver.SQLGetInfo(fHDBC, SQL_PARAM_ARRAY_ROW_COUNTS, @InfoValue, SizeOf(SQLUINTEGER), nil));
     fArrayRowSupported := InfoValue = SQL_PARC_BATCH;
   finally
     FreeAndNil(ConnectStrings)
@@ -520,6 +508,10 @@ begin
   inherited Open;
   inherited SetTransactionIsolation(GetMetaData.GetDatabaseInfo.GetDefaultTransactionIsolation);
   inherited SetReadOnly(GetMetaData.GetDatabaseInfo.IsReadOnly);
+  if not GetAutoCommit then begin
+    inherited SetAutoCommit(True);
+    SetAutoCommit(False);
+  end;
   fRetaining := GetMetaData.GetDatabaseInfo.SupportsOpenCursorsAcrossCommit and
                 GetMetaData.GetDatabaseInfo.SupportsOpenCursorsAcrossRollback;
   tmp := UpperCase(GetMetaData.GetDatabaseInfo.GetDriverName);
@@ -538,16 +530,12 @@ end;
   commit has been disabled.
   @see #setAutoCommit
 }
-procedure TZAbstractODBCConnection.RegisterPendingStatement(
-  const Value: IZStatement);
-begin
-  fPendingStmts.Add(Pointer(Value))
-end;
-
 procedure TZAbstractODBCConnection.Rollback;
 begin
+  if GetAutoCommit then
+    raise Exception.Create(SInvalidOpInAutoCommit);
   if (not AutoCommit) and (not Closed) then
-    CheckDbcError(fPlainDriver.EndTran(SQL_HANDLE_DBC,fHDBC,SQL_ROLLBACK));
+    CheckDbcError(fPlainDriver.SQLEndTran(SQL_HANDLE_DBC,fHDBC,SQL_ROLLBACK));
 end;
 
 {**
@@ -570,11 +558,12 @@ end;
 
   @param autoCommit true enables auto-commit; false disables auto-commit.
 }
-procedure TZAbstractODBCConnection.SetAutoCommit(Value: Boolean);
 const CommitMode: Array[Boolean] of Pointer = (SQL_AUTOCOMMIT_OFF, SQL_AUTOCOMMIT_ON);
+procedure TZAbstractODBCConnection.SetAutoCommit(Value: Boolean);
 begin
   if Value <> AutoCommit then begin
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC,SQL_ATTR_AUTOCOMMIT,CommitMode[Value],0));
+    if not Closed then
+      CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC,SQL_ATTR_AUTOCOMMIT,CommitMode[Value],0));
     inherited SetAutoCommit(Value);
   end;
 end;
@@ -600,11 +589,12 @@ end;
   @param readOnly true enables read-only mode; false disables
     read-only mode.
 }
-procedure TZAbstractODBCConnection.SetReadOnly(Value: Boolean);
 const AccessMode: array[Boolean] of Pointer = (SQL_MODE_READ_WRITE, SQL_MODE_READ_ONLY);
+procedure TZAbstractODBCConnection.SetReadOnly(Value: Boolean);
 begin
   if Value <> ReadOnly then begin
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC,SQL_ATTR_ACCESS_MODE,AccessMode[Value],0));
+    if not Closed then
+      CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC,SQL_ATTR_ACCESS_MODE,AccessMode[Value],0));
     inherited SetReadOnly(Value);
   end;
 end;
@@ -621,8 +611,6 @@ end;
     exception of TRANSACTION_NONE; some databases may not support other values
   @see DatabaseMetaData#supportsTransactionIsolationLevel
 }
-procedure TZAbstractODBCConnection.SetTransactionIsolation(
-  Level: TZTransactIsolationLevel);
 const ODBCTIL: array[TZTransactIsolationLevel] of Pointer =
   ( nil,
     Pointer(SQL_TRANSACTION_READ_UNCOMMITTED),
@@ -630,10 +618,12 @@ const ODBCTIL: array[TZTransactIsolationLevel] of Pointer =
     Pointer(SQL_TRANSACTION_REPEATABLE_READ),
     Pointer(SQL_TRANSACTION_SERIALIZABLE)
   );
+procedure TZAbstractODBCConnection.SetTransactionIsolation(
+  Level: TZTransactIsolationLevel);
 begin
   if (TransactIsolationLevel <> Level) and Assigned(ODBCTIL[Level]) and Assigned(fHDBC) then begin
     StopTransaction;
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC,SQL_ATTR_TXN_ISOLATION,ODBCTIL[Level],0));
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC,SQL_ATTR_TXN_ISOLATION,ODBCTIL[Level],0));
     StartTransaction;
     inherited SetTransactionIsolation(Level);
   end;
@@ -642,23 +632,14 @@ end;
 procedure TZAbstractODBCConnection.StartTransaction;
 begin
   if (not AutoCommit) and Assigned(fHDBC) then
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC,SQL_ATTR_AUTOCOMMIT,SQL_AUTOCOMMIT_OFF,0));
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC,SQL_ATTR_AUTOCOMMIT,SQL_AUTOCOMMIT_OFF,0));
 end;
 
 procedure TZAbstractODBCConnection.StopTransaction;
 const CompletionType: array[Boolean] of SQLSMALLINT = (SQL_ROLLBACK, SQL_COMMIT);
 begin
   if (not Closed) and Assigned(fHDBC) then
-    CheckDbcError(fPlainDriver.EndTran(SQL_HANDLE_DBC,fHDBC,CompletionType[AutoCommit]));
-end;
-
-procedure TZAbstractODBCConnection.UnRegisterPendingStatement(
-  const Value: IZStatement);
-var
-  I: Integer;
-begin
-  I := fPendingStmts.IndexOf(Pointer(Value));
-  if I > -1 then fPendingStmts.Delete(I);
+    CheckDbcError(fPlainDriver.SQLEndTran(SQL_HANDLE_DBC,fHDBC,CompletionType[AutoCommit]));
 end;
 
 { TZODBCConnectionW }
@@ -671,12 +652,9 @@ end;
 }
 function TZODBCConnectionW.CreatePreparedStatement(const SQL: string;
   Info: TStrings): IZPreparedStatement;
-var Stmt: TZODBCPreparedStatementW;
 begin
   if Closed then Open;
-  Stmt := TZODBCPreparedStatementW.Create(Self, fHDBC, SQL, Info);
-  RegisterPendingStatement(Stmt);
-  Result := Stmt;
+  Result := TZODBCPreparedStatementW.Create(Self, fHDBC, SQL, Info);
 end;
 
 {**
@@ -692,16 +670,16 @@ var
 begin
   Result := inherited GetCatalog;
   if Result = '' then begin
-    CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+    CheckDbcError((fPlainDriver as TODBC3UnicodePlainDriver).SQLGetConnectAttrW(fHDBC,
       SQL_ATTR_CURRENT_CATALOG, nil, 0, @aLen));
     if aLen > 0 then begin
       {$IFDEF UNICODE}
       SetLength(Result, aLen shr 1);
-      CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+      CheckDbcError((fPlainDriver as TODBC3UnicodePlainDriver).SQLGetConnectAttrW(fHDBC,
         SQL_ATTR_CURRENT_CATALOG, Pointer(Result), Length(Result), @aLen));
       {$ELSE}
       SetLength(Buf, aLen shr 1);
-      CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+      CheckDbcError((fPlainDriver as TODBC3UnicodePlainDriver).SQLGetConnectAttrW(fHDBC,
         SQL_ATTR_CURRENT_CATALOG, Pointer(Result), Length(Result), @aLen));
       Result := PUnicodeToRaw(Pointer(Buf), Length(Buf), ZOSCodePage);
       {$ENDIF}
@@ -730,12 +708,12 @@ begin
     {$IFNDEF UNICODE}
     aSQL := PRawToUnicode(Pointer(SQL), Length(SQL), ConSettings.CTRL_CP);
     SetLength(nSQL, Length(aSQL) shl 1);
-    CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).NativeSql(fHDBC,
+    CheckDbcError(TODBC3UnicodePlainDriver(fPlainDriver).SQLNativeSqlW(fHDBC,
       Pointer(aSQL), Length(aSQL), Pointer(nSQL), Length(nSQL), @NewLength));
     Result := PUnicodeToRaw(Pointer(nSQL), NewLength, ConSettings^.ClientCodePage^.CP);
     {$ELSE}
     SetLength(Result, Length(SQL) shl 1);
-    CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).NativeSql(fHDBC,
+    CheckDbcError(TODBC3UnicodePlainDriver(fPlainDriver).SQLNativeSqlW(fHDBC,
       Pointer(SQL), Length(SQL), Pointer(Result), Length(Result), @NewLength));
     SetLength(Result, NewLength);
     {$ENDIF}
@@ -756,10 +734,10 @@ begin
   if Catalog <> inherited GetCatalog then begin
     {$IFNDEF UNICODE}
     aCatalog := PRawToUnicode(Pointer(Catalog), Length(Catalog), ZOSCodePage);
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
       Pointer(aCatalog), Length(aCatalog) shl 1));
     {$ELSE}
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
       Pointer(Catalog), Length(Catalog) shl 1));
     {$ENDIF}
     inherited SetCatalog(Catalog);
@@ -776,12 +754,9 @@ end;
 }
 function TZODBCConnectionA.CreatePreparedStatement(const SQL: string;
   Info: TStrings): IZPreparedStatement;
-var Stmt: TZODBCPreparedStatementA;
 begin
   if Closed then Open;
-  Stmt := TZODBCPreparedStatementA.Create(Self, fHDBC, SQL, Info);
-  RegisterPendingStatement(Stmt);
-  Result := Stmt;
+  Result := TZODBCPreparedStatementA.Create(Self, fHDBC, SQL, Info);
 end;
 
 {**
@@ -797,16 +772,16 @@ var
 begin
   Result := GetCatalog;
   if Result = '' then begin
-    CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+    CheckDbcError((fPlainDriver as TODBC3RawPlainDriver).SQLGetConnectAttr(fHDBC,
       SQL_ATTR_CURRENT_CATALOG, nil, 0, @aLen));
     if aLen > 0 then begin
       {$IFNDEF UNICODE}
       SetLength(Result, aLen);
-      CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+      CheckDbcError((fPlainDriver as TODBC3RawPlainDriver).SQLGetConnectAttr(fHDBC,
         SQL_ATTR_CURRENT_CATALOG, Pointer(Result), Length(Result), @aLen));
       {$ELSE}
       SetLength(Buf, aLen);
-      CheckDbcError((fPlainDriver as IODBC3UnicodePlainDriver).GetConnectAttr(fHDBC,
+      CheckDbcError((fPlainDriver as TODBC3RawPlainDriver).SQLGetConnectAttr(fHDBC,
         SQL_ATTR_CURRENT_CATALOG, Pointer(Result), Length(Result), @aLen));
       Result := PRawToUnicode(Pointer(Buf), Length(Buf), ZOSCodePage);
       {$ENDIF}
@@ -835,12 +810,12 @@ begin
     {$IFDEF UNICODE}
     aSQL := PUnicodeToRaw(Pointer(SQL), Length(SQL), ZOSCodePage);
     SetLength(nSQL, Length(aSQL) shl 1); //
-    CheckDbcError((fPlainDriver as IODBC3RawPlainDriver).NativeSql(fHDBC,
+    CheckDbcError(TODBC3RawPlainDriver(fPlainDriver).SQLNativeSql(fHDBC,
       Pointer(aSQL), Length(aSQL), Pointer(nSQL), Length(nSQL), @NewLength));
     Result := PRawToUnicode(Pointer(nSQL), NewLength, ZOSCodePage);
     {$ELSE}
     SetLength(Result, Length(SQL) shl 1); //
-    CheckDbcError((fPlainDriver as IODBC3RawPlainDriver).NativeSql(fHDBC,
+    CheckDbcError(TODBC3RawPlainDriver(fPlainDriver).SQLNativeSql(fHDBC,
       Pointer(SQL), Length(SQL), Pointer(Result), Length(Result), @NewLength));
     SetLength(Result, NewLength);
     {$ENDIF}
@@ -861,10 +836,10 @@ begin
   if Catalog <> inherited GetCatalog then begin
     {$IFDEF UNICODE}
     aCatalog := PUnicodeToRaw(Pointer(Catalog), Length(Catalog), ZOSCodePage);
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
       Pointer(aCatalog), Length(aCatalog)));
     {$ELSE}
-    CheckDbcError(fPlainDriver.SetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
+    CheckDbcError(fPlainDriver.SQLSetConnectAttr(fHDBC, SQL_ATTR_CURRENT_CATALOG,
       Pointer(Catalog), Length(Catalog)));
     {$ENDIF}
     inherited SetCatalog(Catalog);

@@ -199,9 +199,10 @@ begin
 
   NewLine := LineEnding;
   Line := '/AAA/ BBB CCC';
-  if StartsWith(Protocol, 'mysql') then
+  if ProtocolType = protMySQL then
     Comment := '# Comment...'
-  else Comment := '/* Comment... */';
+  else
+    Comment := '/* Comment... */';
   Delimiter := NewLine + 'Go' + NewLine;
 
   Text := Comment + NewLine + Line + Delimiter + NewLine + '   ' + NewLine + Line +
@@ -368,7 +369,7 @@ const
     '/*==============================================================*/');
 begin
   FProcessor.DelimiterType := dtSetTerm;
-  Fprocessor.LoadFromFile('..\..\..\database\text\TestSQLProcessor3Stmts.sql');
+  Fprocessor.LoadFromFile(ExtractFilePath(ParamStr(0)) + '/../../../database/text/TestSQLProcessor3Stmts.sql');
   Fprocessor.Parse;
   CheckEquals(3, FProcessor.StatementCount);
   CheckEquals(stmt1,FProcessor.Statements[0]);

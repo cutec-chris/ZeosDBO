@@ -92,18 +92,18 @@ type
     property Loaded: Boolean read FLoaded write FLoaded;
     property Handle: THandle { M.A. LongWord} read FHandle write FHandle;
     property CurrentLocation: String read FCurrentLocation write FCurrentLocation;
-    function GetAddress(ProcName: PAnsiChar): Pointer;
+    function GetAddress(ProcName: {$IFDEF NEXTGEN}PWideChar{$ELSE}PAnsiChar{$ENDIF}): Pointer;
   end;
 
 implementation
 
 uses SysUtils, 
-{$IFNDEF UNIX} 
-  Windows, 
-{$ELSE} 
-  {$IFNDEF FPC} 
-    libc, 
-  {$ENDIF} 
+{$IFDEF MSWINDOWS}
+  Windows,
+(*{$ELSE}
+  {$IFNDEF FPC}
+    libc,
+  {$ENDIF} *)
 {$ENDIF}
   ZMessages;
 
@@ -182,10 +182,10 @@ begin
   newpath := ExtractFilePath(Location);
   // AB modif BEGIN
   try
-   if newpath <> '' then begin
-     temp := GetCurrentDir;
-     SetCurrentDir(newpath);
-   end;
+    if newpath <> '' then begin
+      temp := GetCurrentDir;
+      SetCurrentDir(newpath);
+    end;
   // AB modif END
 
 {$IFDEF UNIX}
@@ -200,12 +200,11 @@ begin
 
   // AB modif BEGIN
   finally
-   if temp<>'' then
-     SetCurrentDir(temp);
+    if temp<>'' then
+      SetCurrentDir(temp);
   end;
   // AB modif END
-  if (FHandle <> INVALID_HANDLE_VALUE) and (FHandle <> 0) then
-  begin
+  if (FHandle <> INVALID_HANDLE_VALUE) and (FHandle <> 0) then  begin
     FLoaded := True;
     FCurrentLocation := Location;
     Result := True;
@@ -222,21 +221,16 @@ var
 begin
   TriedLocations := '';
   for I := 0 to High(FLocations) do
-    begin
-      if ZLoadLibrary(FLocations[I]) then
-        Break
-      else
-        if TriedLocations <> '' then
-          TriedLocations := TriedLocations + ', ' + FLocations[I]
-        else
-          TriedLocations := FLocations[I];
-    end;
+    if ZLoadLibrary(FLocations[I]) then
+      Break
+    else if TriedLocations <> ''
+      then TriedLocations := TriedLocations + ', ' + FLocations[I]
+      else TriedLocations := FLocations[I];
 
   if not Loaded then
-    if (Length(FLocations) > 0) and FileExists(FLocations[High(FLocations)]) then
-      raise Exception.Create(Format(SLibraryNotCompatible, [TriedLocations]))
-    else
-      raise Exception.Create(Format(SLibraryNotFound, [TriedLocations]));
+    if (Length(FLocations) > 0) and FileExists(FLocations[High(FLocations)])
+    then raise Exception.Create(Format(SLibraryNotCompatible, [TriedLocations]))
+    else raise Exception.Create(Format(SLibraryNotFound, [TriedLocations]));
   Result := True;
 end;
 
@@ -267,7 +261,7 @@ end;
   @param ProcName a name of the procedure.
   @return a procedure address.
 }
-function TZNativeLibraryLoader.GetAddress(ProcName: PAnsiChar): Pointer;
+function TZNativeLibraryLoader.GetAddress(ProcName: {$IFDEF NEXTGEN}PWideChar{$ELSE}PAnsiChar{$ENDIF}): Pointer;
 begin
   Result := GetProcAddress(Handle, ProcName);
 end;
