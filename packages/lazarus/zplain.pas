@@ -8,11 +8,9 @@ interface
 
 uses
   ZPlainDbLibDriver, ZPlainDriver, ZPlainLoader, ZPlainMySqlConstants, 
-  ZPlainMySqlDriver, ZPlainOracleConstants, ZPlainOracleDriver, 
-  ZPlainPostgreSqlDriver, ZPlainSqLiteDriver, ZPlainASADriver, 
-  ZPlainASAConstants, ZPlainFirebirdDriver, ZPlainFirebirdInterbaseConstants, 
-  ZPlainDbLibConstants, ZPlainAdoDriver, ZPlainAdo, ZOleDB, ZPlainOleDBDriver, 
-  ZPlainODBCDriver;
+  ZPlainMySqlDriver, ZPlainPostgreSqlDriver, ZPlainSqLiteDriver, 
+  ZPlainFirebirdDriver, ZPlainFirebirdInterbaseConstants, 
+  ZPlainDbLibConstants, ZPlainODBCDriver, zplainplatform;
 
 implementation
 

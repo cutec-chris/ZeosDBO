@@ -18,7 +18,7 @@
     </CompilerOptions>
     <Description Value="Zeos Plain Database API"/>
     <Version Major="7" Minor="3"/>
-    <Files Count="20">
+    <Files Count="16">
       <Item1>
         <Filename Value="../../src/plain/ZPlainDbLibDriver.pas"/>
         <UnitName Value="ZPlainDbLibDriver"/>
@@ -40,63 +40,40 @@
         <UnitName Value="ZPlainMySqlDriver"/>
       </Item7>
       <Item8>
-        <Filename Value="../../src/plain/ZPlainOracleConstants.pas"/>
-        <UnitName Value="ZPlainOracleConstants"/>
-      </Item8>
-      <Item9>
-        <Filename Value="../../src/plain/ZPlainOracleDriver.pas"/>
-        <UnitName Value="ZPlainOracleDriver"/>
-      </Item9>
-      <Item10>
         <Filename Value="../../src/plain/ZPlainPostgreSqlDriver.pas"/>
         <UnitName Value="ZPlainPostgreSqlDriver"/>
-      </Item10>
-      <Item11>
+      </Item8>
+      <Item9>
         <Filename Value="../../src/plain/ZPlainSqLiteDriver.pas"/>
         <UnitName Value="ZPlainSqLiteDriver"/>
-      </Item11>
-      <Item12>
-        <Filename Value="../../src/plain/ZPlainASADriver.pas"/>
-        <UnitName Value="ZPlainASADriver"/>
-      </Item12>
-      <Item13>
-        <Filename Value="../../src/plain/ZPlainASAConstants.pas"/>
-        <UnitName Value="ZPlainASAConstants"/>
-      </Item13>
-      <Item14>
+      </Item9>
+      <Item10>
         <Filename Value="../../src/plain/ZPlainFirebirdDriver.pas"/>
         <UnitName Value="ZPlainFirebirdDriver"/>
-      </Item14>
-      <Item15>
+      </Item10>
+      <Item11>
         <Filename Value="../../src/plain/ZPlainFirebirdInterbaseConstants.pas"/>
         <UnitName Value="ZPlainFirebirdInterbaseConstants"/>
-      </Item15>
-      <Item16>
+      </Item11>
+      <Item12>
         <Filename Value="../../src/plain/ZPlainDbLibConstants.pas"/>
         <UnitName Value="ZPlainDbLibConstants"/>
-      </Item16>
-      <Item19>
+      </Item12>
+      <Item15>
         <Filename Value="../../src/plain/ZPlainODBCDriver.pas"/>
         <UnitName Value="ZPlainODBCDriver"/>
-      </Item19>
-      <Item20>
+      </Item15>
+      <Item16>
         <Filename Value="zplainplatform.pas"/>
-        <UnitName Value="ZPlainPlatformUnits"/>
-      </Item20>
+        <UnitName Value="zplainplatform"/>
+      </Item16>
     </Files>
-    <RequiredPkgs Count="3">
+    <RequiredPkgs Count="1">
       <Item1>
         <PackageName Value="zcore"/>
         <MaxVersion Major="7" Minor="3"/>
         <MinVersion Major="7" Minor="3" Valid="True"/>
       </Item1>
-      <Item2>
-        <PackageName Value="LCL"/>
-      </Item2>
-      <Item3>
-        <PackageName Value="FCL"/>
-        <MinVersion Major="1" Valid="True"/>
-      </Item3>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>

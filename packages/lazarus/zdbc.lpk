@@ -20,7 +20,7 @@
     </CompilerOptions>
     <Description Value="Zeos Low Level Database API"/>
     <Version Major="7" Minor="3"/>
-    <Files Count="13">
+    <Files Count="11">
       <Item1>
         <Filename Value="..\..\src\dbc\ZDbcDbLib.pas"/>
         <UnitName Value="ZDbcDbLib"/>
@@ -42,39 +42,31 @@
         <UnitName Value="ZDbcMySql"/>
       </Item5>
       <Item6>
-        <Filename Value="..\..\src\dbc\ZDbcOracle.pas"/>
-        <UnitName Value="ZDbcOracle"/>
-      </Item6>
-      <Item7>
         <Filename Value="..\..\src\dbc\ZDbcPostgreSql.pas"/>
         <UnitName Value="ZDbcPostgreSql"/>
-      </Item7>
-      <Item8>
+      </Item6>
+      <Item7>
         <Filename Value="..\..\src\dbc\ZDbcSqLite.pas"/>
         <UnitName Value="ZDbcSqLite"/>
-      </Item8>
-      <Item9>
-        <Filename Value="..\..\src\dbc\ZDbcASA.pas"/>
-        <UnitName Value="ZDbcASA"/>
-      </Item9>
-      <Item10>
+      </Item7>
+      <Item8>
         <Filename Value="..\..\src\dbc\ZDbcPooled.pas"/>
         <UnitName Value="ZDbcPooled"/>
-      </Item10>
-      <Item11>
+      </Item8>
+      <Item9>
         <Filename Value="..\..\src\dbc\ZDbcODBCCon.pas"/>
         <UnitName Value="ZDbcODBCCon"/>
-      </Item11>
-      <Item12>
+      </Item9>
+      <Item10>
         <Filename Value="..\..\src\dbc\ZDbcProperties.pas"/>
         <UnitName Value="ZDbcProperties"/>
-      </Item12>
-      <Item13>
+      </Item10>
+      <Item11>
         <Filename Value="zdbcplatform.pas"/>
-        <UnitName Value="zplainplatform"/>
-      </Item13>
+        <UnitName Value="zdbcplatform"/>
+      </Item11>
     </Files>
-    <RequiredPkgs Count="5">
+    <RequiredPkgs Count="3">
       <Item1>
         <PackageName Value="zplain"/>
         <MinVersion Major="7" Minor="2" Valid="True"/>
@@ -87,13 +79,6 @@
         <PackageName Value="zcore"/>
         <MinVersion Major="7" Minor="2" Valid="True"/>
       </Item3>
-      <Item4>
-        <PackageName Value="LCL"/>
-      </Item4>
-      <Item5>
-        <PackageName Value="FCL"/>
-        <MinVersion Major="1" Valid="True"/>
-      </Item5>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>
