@@ -62,15 +62,20 @@ uses
 type
 
   {** Implements a MySQL-specific number state object. }
-  TZMySQLNumberState = TZGenericSQLHexNumberState;
+  TZMySQLNumberState = class (TZNumberState)
+  public
+    function NextToken(Stream: TStream; FirstChar: Char;
+      Tokenizer: TZTokenizer): TZToken; override;
+  end;
 
   {** Implements a MySQL-specific quote string state object. }
   TZMySQLQuoteState = class (TZQuoteState)
   public
-    function NextToken(var SPos: PChar; const NTerm: PChar;
+    function NextToken(Stream: TStream; FirstChar: Char;
       {%H-}Tokenizer: TZTokenizer): TZToken; override;
+
     function EncodeString(const Value: string; QuoteChar: Char): string; override;
-    function DecodeToken(const Value: TZToken; QuoteChar: Char): string; override;
+    function DecodeString(const Value: string; QuoteChar: Char): string; override;
   end;
 
   {**
@@ -79,7 +84,7 @@ type
   }
   TZMySQLCommentState = class (TZCppCommentState)
   public
-    function NextToken(var SPos: PChar; const NTerm: PChar;
+    function NextToken(Stream: TStream; FirstChar: Char;
       Tokenizer: TZTokenizer): TZToken; override;
   end;
 
@@ -103,7 +108,113 @@ type
 
 implementation
 
-{$IFDEF FAST_MOVE}uses ZFastCode;{$ENDIF}
+{$IFDEF FAST_MOVE}
+uses ZFastCode;
+{$ENDIF}
+
+{ TZMySQLNumberState }
+
+{**
+  Return a number token from a reader.
+  @return a number token from a reader
+}
+function TZMySQLNumberState.NextToken(Stream: TStream; FirstChar: Char;
+  Tokenizer: TZTokenizer): TZToken;
+var
+  HexDecimal: Boolean;
+  FloatPoint: Boolean;
+  LastChar: Char;
+
+  procedure ReadHexDigits;
+  begin
+    LastChar := #0;
+    while Stream.Read(LastChar, SizeOf(Char)) > 0 do
+      if CharInSet(LastChar, ['0'..'9','a'..'f','A'..'F']) then begin
+        ToBuf(LastChar, Result.Value);
+        LastChar := #0;
+      end
+      else
+      begin
+        Stream.Seek(-SizeOf(Char), soFromCurrent);
+        Break;
+      end;
+  end;
+
+  procedure ReadDecDigits;
+  begin
+    LastChar := #0;
+    while Stream.Read(LastChar, SizeOf(Char)) > 0 do
+      if CharInSet(LastChar, ['0'..'9']) then begin
+        ToBuf(LastChar, Result.Value);
+        LastChar := #0;
+      end else begin
+        Stream.Seek(-SizeOf(Char), soFromCurrent);
+        Break;
+      end;
+  end;
+
+begin
+  HexDecimal := False;
+  FloatPoint := FirstChar = '.';
+  Result.Value := '';
+  InitBuf(FirstChar);
+  Result.TokenType := ttUnknown;
+  LastChar := #0;
+
+  { Reads the first part of the number before decimal point }
+  if not FloatPoint then
+  begin
+    ReadDecDigits;
+    FloatPoint := (LastChar = '.');
+    if FloatPoint then
+    begin
+      Stream.Read(LastChar, SizeOf(Char));
+      ToBuf(LastChar, Result.Value);
+    end;
+  end;
+
+  { Reads the second part of the number after decimal point }
+  if FloatPoint then
+    ReadDecDigits;
+
+  { Reads a power part of the number }
+  if (Ord(LastChar) or $20) = ord('e') then //CharInSet(LastChar, ['e','E']) then
+  begin
+    Stream.Read(LastChar, SizeOf(Char));
+    ToBuf(LastChar, Result.Value);
+    FloatPoint := True;
+
+    Stream.Read(LastChar, SizeOf(Char));
+    if CharInSet(LastChar, ['0'..'9','-','+']) then begin
+      ToBuf(LastChar, Result.Value);
+      ReadDecDigits;
+    end else begin
+      FlushBuf(Result.Value);
+      Result.Value := Copy(Result.Value, 1, Length(Result.Value) - 1);
+      Stream.Seek(-2*SizeOf(Char), soFromCurrent);
+    end;
+  end;
+
+  { Reads the nexdecimal number }
+  if (Result.Value = '') and (FirstChar = '0') and ((Ord(LastChar) or $20) = ord('x')) then // CharInSet(LastChar, ['x','X']) then
+  begin
+    Stream.Read(LastChar, SizeOf(Char));
+    ToBuf(LastChar, Result.Value);
+    ReadHexDigits;
+    HexDecimal := True;
+  end;
+  FlushBuf(Result.Value);
+
+  { Prepare the result }
+  if Result.Value = '.' then begin
+    if Tokenizer.SymbolState <> nil then
+      Result := Tokenizer.SymbolState.NextToken(Stream, FirstChar, Tokenizer);
+  end else if HexDecimal then
+    Result.TokenType := ttHexDecimal
+  else if FloatPoint then
+    Result.TokenType := ttFloat
+  else Result.TokenType := ttInteger;
+end;
 
 { TZMySQLQuoteState }
 
@@ -114,51 +225,36 @@ implementation
 
   @return a quoted string token from a reader
 }
-function TZMySQLQuoteState.NextToken(var SPos: PChar; const NTerm: PChar;
+function TZMySQLQuoteState.NextToken(Stream: TStream; FirstChar: Char;
   Tokenizer: TZTokenizer): TZToken;
 const BackSlash = Char('\');
 var
+  ReadChar: Char;
   LastChar: Char;
 begin
-  Result.P := SPos;
-  If SPos^ = '`'
-  then Result.TokenType := ttQuotedIdentifier
-  else Result.TokenType := ttQuoted;
+  Result.Value := '';
+  InitBuf(FirstChar);
+
+  If FirstChar = '`' then
+    Result.TokenType := ttQuotedIdentifier
+  else
+    Result.TokenType := ttQuoted;
 
   LastChar := #0;
-  while SPos < NTerm do begin
-    Inc(SPos);
-    if (LastChar = Result.P^) and (SPos^ <> Result.P^) then begin
-      Dec(SPos);
+  while Stream.Read(ReadChar{%H-}, SizeOf(Char)) > 0 do
+  begin
+    if (LastChar = FirstChar) and (ReadChar <> FirstChar) then begin
+      Stream.Seek(-SizeOf(Char), soFromCurrent);
       Break;
     end;
+    ToBuf(ReadChar, Result.Value);
     if LastChar = BackSlash then
       LastChar := #0
-    else if (LastChar = Result.P^) and (SPos^ = Result.P^) then
+    else if (LastChar = FirstChar) and (ReadChar = FirstChar) then
       LastChar := #0
-    else
-      LastChar := SPos^;
+    else LastChar := ReadChar;
   end;
-   Result.L := SPos-Result.P+1;
-end;
-
-{**
-  Decodes a string value.
-  @param Value a token value to be decoded.
-  @param QuoteChar a string quote character.
-  @returns an decoded string.
-}
-function TZMySQLQuoteState.DecodeToken(const Value: TZToken;
-  QuoteChar: Char): string;
-begin
-  if (Value.L >= 2) and (Ord(QuoteChar) in [Ord(#39), Ord('"'), Ord('`')])
-    and (Value.p^ = QuoteChar) and ((Value.P+Value.L-1)^ = QuoteChar) then
-  begin
-    if Value.L > 2
-    then DecodeCString(Value.L-2, Value.P+1, {$IF defined(FPC) and defined(WITH_RAWBYTESTRING)}RawByteString(Result){$ELSE}Result{$IFEND})
-    else Result := '';
-  end
-  else SetString(Result, Value.P, Value.L)
+  FlushBuf(Result.Value);
 end;
 
 {**
@@ -169,8 +265,29 @@ end;
 }
 function TZMySQLQuoteState.EncodeString(const Value: string; QuoteChar: Char): string;
 begin
-  if (Ord(QuoteChar) in [Ord(#39), Ord('"'), Ord('`')]) then
+  if CharInSet(QuoteChar, [#39, '"', '`']) then
     Result := QuoteChar + EncodeCString(Value) + QuoteChar
+  else Result := Value;
+end;
+
+{**
+  Decodes a string value.
+  @param Value a string value to be decoded.
+  @param QuoteChar a string quote character.
+  @returns an decoded string.
+}
+function TZMySQLQuoteState.DecodeString(const Value: string; QuoteChar: Char): string;
+var
+  Len: Integer;
+begin
+  Len := Length(Value);
+  if (Len >= 2) and CharInSet(QuoteChar, [#39, '"', '`'])
+    and (Value[1] = QuoteChar) and (Value[Len] = QuoteChar) then
+  begin
+    if Len > 2 then
+      Result := DecodeCString(Copy(Value, 2, Len - 2))
+    else Result := '';
+  end
   else Result := Value;
 end;
 
@@ -181,52 +298,56 @@ end;
   @return either just a slash token, or the results of
     delegating to a comment-handling state
 }
-function TZMySQLCommentState.NextToken(var SPos: PChar; const NTerm: PChar;
+function TZMySQLCommentState.NextToken(Stream: TStream; FirstChar: Char;
   Tokenizer: TZTokenizer): TZToken;
+var
+  ReadChar: Char;
+  ReadNum, ReadNum2: Integer;
 begin
   Result.TokenType := ttUnknown;
-  Result.P := SPos;
+  InitBuf(Firstchar);
+  Result.Value := '';
 
-  if SPos+1 < NTerm then
-  case SPos^ of
-    '-':
-      begin
-        Inc(SPos);
-        if SPos^ = '-' then
-        begin
-          Result.TokenType := ttComment;
-          GetSingleLineComment(SPos, NTerm);
-        end else
-          Dec(SPos);
+  if FirstChar = '-' then begin
+    ReadNum := Stream.Read(ReadChar{%H-}, SizeOf(Char));
+    if (ReadNum > 0) and (ReadChar = '-') then begin
+      Result.TokenType := ttComment;
+      ToBuf(ReadChar, Result.Value);
+      GetSingleLineComment(Stream, Result.Value);
+    end else begin
+      if ReadNum > 0 then
+        Stream.Seek(-SizeOf(Char), soFromCurrent);
+    end;
+  end else if FirstChar = '#' then begin
+    Result.TokenType := ttComment;
+    GetSingleLineComment(Stream, Result.Value);
+  end else if FirstChar = '/' then begin
+    ReadNum := Stream.Read(ReadChar, SizeOf(Char));
+    if (ReadNum > 0) and (ReadChar = '*') then
+    begin
+      ToBuf(ReadChar, Result.Value);
+      ReadNum2 := Stream.Read(ReadChar, SizeOf(Char));
+      // Don't treat '/*!' comments as normal comments!!
+      if (ReadNum2 > 0) then begin
+        ToBuf(ReadChar, Result.Value);
+        if (ReadChar <> '!') then
+          Result.TokenType := ttComment
+        else
+          Result.TokenType := ttSymbol;
+        GetMultiLineComment(Stream, Result.Value);
       end;
-    '#':
-      begin
-        Result.TokenType := ttComment;
-        GetSingleLineComment(SPos, NTerm);
-      end;
-    '/':
-      begin
-        Inc(SPos);
-        if SPos^ = '*' then begin
-          Inc(Spos);
-          // Don't treat '/*!' comments as normal comments!!
-          if (SPos < NTerm) then begin
-            if (SPos^ <> '!') then
-              Result.TokenType := ttComment
-            else
-              Result.TokenType := ttSymbol;
-            GetMultiLineComment(SPos, NTerm);
-          end else
-            Dec(SPos);
-        end else
-          Dec(SPos);
-      end;
+    end
+    else
+    begin
+      if ReadNum > 0 then
+        Stream.Seek(-SizeOf(Char), soFromCurrent);
+    end;
   end;
 
   if (Result.TokenType = ttUnknown) and (Tokenizer.SymbolState <> nil) then
-    Result := Tokenizer.SymbolState.NextToken(SPos, NTerm, Tokenizer)
+    Result := Tokenizer.SymbolState.NextToken(Stream, FirstChar, Tokenizer)
   else
-     Result.L := SPos-Result.P+1;
+    FlushBuf(Result.Value);
 end;
 
 { TZMySQLSymbolState }

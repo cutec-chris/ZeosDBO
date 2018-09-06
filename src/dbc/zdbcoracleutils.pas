@@ -55,6 +55,10 @@ interface
 
 {$I ZDbc.inc}
 
+{$IFOPT R+}
+  {$DEFINE RangeCheck}
+{$ENDIF}
+
 uses
   Types, Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} SysUtils,
   {$IF defined(WITH_INLINE) and defined(MSWINDOWS) and not defined(WITH_UNICODEFROMLOCALECHARS)}
@@ -65,24 +69,13 @@ uses
 
 const
   MAX_SQLVAR_LIMIT = 1024;
-  Max_OCI_String_Size = 4000; //prevent 'OCI_ERROR: ORA-01459: invalid length for variable character string' if buffer is to small
+  Max_OCI_String_Size = 4000;
   Max_OCI_Raw_Size = 2000;
 
 
 type
-  { a struct for the ora long (char/byte) types }
-  POCILong = ^TOCILong;
-  TOCILong = record
-    Len: Integer;
-    data: array[0..7] of Byte; //just something for debugging
-  end;
-  { a struct for the ora var(char/byte) types }
-  POCIVary = ^TOCIVary;
-  TOCIVary = record
-    Len: SmallInt;
-    data: array[0..7] of Byte; //just something for debugging
-  end;
   {** Declares SQL Object }
+
   POCIObject = ^TOCIObject;
   TObjFields = array of POCIObject;
   TOCIObject = Record                 // embedded object or table will work recursively
@@ -101,7 +94,7 @@ type
     is_final_type:  ub1;              //object's OCI_ATTR_IS_FINAL_TYPE
     fields:         TObjFields;       //one object for each field/property
     field_count:    ub2;              //The number of fields Not really needed but nice to have
-    next_subtype:   POCIObject;       //There is strored information about subtypes for inherited objects
+    next_subtype:   POCIObject;       //There is strored information about subtypes for inteherited objects
     stmt_handle:    POCIStmt;         //the Statement-Handle
     Level:          Integer;          //the instance level
     Pinned:         Boolean;          //did we pin the obj on decribe?
@@ -111,27 +104,6 @@ type
   TUB2Array = array[0..0] of ub2;
   PSB2Array = ^TSB2Array;
   TSB2Array = array[0..0] of sb2;
-
-  PZOCIParamBind = ^TZOCIParamBind;
-  TZOCIParamBind = record
-    {OCI bind Handles}
-    bindpp:     POCIBind; //An address of a bind handle which is implicitly allocated by this call. The bind handle maintains all the bind information for this particular input value. The handle is freed implicitly when the statement handle is deallocated. On input, the value of the pointer must be null or a valid bind handle. binding values
-    valuep:     PAnsiChar; //An address of a data value or an array of data values of the type specified in the dty parameter. An array of data values can be specified for mapping into a PL/SQL table or for providing data for SQL multiple-row operations. When an array of bind values is provided, this is called an array bind in OCI terms.
-                         //For SQLT_NTY or SQLT_REF binds, the valuep parameter is ignored. The pointers to OUT buffers are set in the pgvpp parameter initialized by OCIBindObject().
-                         //If the OCI_ATTR_CHARSET_ID attribute is set to OCI_UTF16ID (replaces the deprecated OCI_UCS2ID, which is retained for backward compatibility), all data passed to and received with the corresponding bind call is assumed to be in UTF-16 encoding.
-    value_sz:   sb4; //The size of a data value. In the case of an array bind, this is the maximum size of any element possible with the actual sizes being specified in the alenp parameter.
-                     //descriptors, locators, or REFs, whose size is unknown to client applications use the size of the structure you are passing in; for example, sizeof (OCILobLocator *).
-    dty:        ub2; //The data type of the value(s) being bound. Named data types (SQLT_NTY) and REFs (SQLT_REF) are valid only if the application has been initialized in object mode. For named data types, or REFs, additional calls must be made with the bind handle to set up the datatype-specific attributes.
-    indp:       PSB2Array; //Pointer to an indicator variable or array. For all data types, this is a pointer to sb2 or an array of sb2s. The only exception is SQLT_NTY, when this pointer is ignored and the actual pointer to the indicator structure or an array of indicator structures is initialized by OCIBindObject(). Ignored for dynamic binds.
-    {zeos}
-    DescriptorType: sb4; //holds our descriptor type we use
-    curelen:      ub4; //the actual number of elements
-
-    Precision: Integer; //field.precision used 4 out params
-    Scale:     Integer; //field.scale used 4 out params
-  end;
-  PZOCIParamBinds = ^TZOCIParamBinds;
-  TZOCIParamBinds = array[0..MAX_SQLVAR_LIMIT] of TZOCIParamBind; //just a nice dubugging range
 
   PZSQLVar = ^TZSQLVar;
   TZSQLVar = {$ifndef FPC_REQUIRES_PROPER_ALIGNMENT}packed{$endif} record
@@ -196,7 +168,7 @@ procedure AllocateOracleSQLVars(var Variables: PZSQLVars; Count: Integer);
   @param ErrorHandle the OCI ErrorHandle
   @param ConSetttings the Pointer to the TZConSettings record
 }
-procedure FreeOracleSQLVars(const PlainDriver: TZOraclePlainDriver;
+procedure FreeOracleSQLVars(const PlainDriver: IZOraclePlainDriver;
   var Variables: PZSQLVars; const Iteration: Integer; const Handle: POCIEnv;
   const ErrorHandle: POCIError; const {%H-}ConSettings: PZConSettings);
 
@@ -208,7 +180,7 @@ procedure SetVariableDataEntrys(var BufferEntry: PAnsiChar; var Variable: PZSQLV
 
 function CalcBufferSizeOfSQLVar(Const Variable: PZSQLVar): Integer; {$IFDEF WITH_INLINE}inline;{$ENDIF}
 
-procedure AllocDesriptors(const PlainDriver: TZOraclePlainDriver;
+procedure AllocDesriptors(const PlainDriver: IZOraclePlainDriver;
   ConnectionHandle: POCIEnv; var Variable: PZSQLVar; Iteration: Integer;
   AllocTemporyLobs: Boolean);
 
@@ -222,7 +194,7 @@ procedure AllocDesriptors(const PlainDriver: TZOraclePlainDriver;
   @param ChunkSize the size in bytes we send the lobs in chunks
   @param Iteration the Iters we can use
 }
-procedure LoadOracleVar(const PlainDriver: TZOraclePlainDriver;
+procedure LoadOracleVar(const PlainDriver: IZOraclePlainDriver;
   const Connection: IZConnection; const ErrorHandle: POCIError;
   const Variable: PZSQLVar; var Value: TZVariant; ChunkSize: Integer;
   Iteration: Integer);
@@ -232,7 +204,7 @@ procedure LoadOracleVar(const PlainDriver: TZOraclePlainDriver;
   @param Variables Oracle variable holders or array of TDesciptorRec.
   @param ArrayCount count of bound arrays
 }
-procedure UnloadOracleVars(var Variables: PZSQLVars);
+procedure UnloadOracleVars(var Variables: PZSQLVars; const Iteration: Integer);
 
 {**
   Convert string Oracle field type to SQLType
@@ -250,7 +222,7 @@ function ConvertOracleTypeToSQLType(const TypeName: string;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckOracleError(const PlainDriver: TZOraclePlainDriver;
+procedure CheckOracleError(const PlainDriver: IZOraclePlainDriver;
   const ErrorHandle: POCIError; const Status: Integer;
   const LogCategory: TZLoggingCategory; const LogMessage: RawByteString;
   const ConSettings: PZConSettings);
@@ -259,7 +231,7 @@ procedure CheckOracleError(const PlainDriver: TZOraclePlainDriver;
   Creates an Oracle result set based on the current settings.
   @return a created result set object.
 }
-function CreateOracleResultSet(
+function CreateOracleResultSet(const PlainDriver: IZOraclePlainDriver;
   const Statement: IZStatement; const LogSQL: string; const Handle: POCIStmt;
   const ErrorHandle: POCIError; ZBufferSize: Integer): IZResultSet; overload;
 
@@ -267,7 +239,7 @@ function CreateOracleResultSet(
   Creates an Oracle result set based on the current settings.
   @return a created result set object.
 }
-function CreateOracleResultSet(
+function CreateOracleResultSet(const PlainDriver: IZOraclePlainDriver;
   const Statement: IZStatement; const LogSQL: string; StmtHandle: POCIStmt;
   ErrorHandle: POCIError; const Params: PZSQLVars;
   Const OracleParams: TZOracleParams): IZResultSet; overload;
@@ -279,9 +251,9 @@ function CreateOracleResultSet(
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure AllocateOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
+procedure AllocateOracleStatementHandles(const PlainDriver: IZOraclePlainDriver;
   const Connection: IZConnection; var Handle: POCIStmt; var ErrorHandle: POCIError;
-  {%H-}UserServerCachedStmt: Boolean = False);
+  UserServerCachedStmt: Boolean = False);
 
 {**
   Frees from memory Oracle handlers for Statement object.
@@ -289,7 +261,7 @@ procedure AllocateOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure FreeOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
+procedure FreeOracleStatementHandles(const PlainDriver: IZOraclePlainDriver;
   var Handle: POCIStmt; var ErrorHandle: POCIError);
 
 {**
@@ -299,7 +271,7 @@ procedure FreeOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure PrepareOracleStatement(const PlainDriver: TZOraclePlainDriver;
+procedure PrepareOracleStatement(const PlainDriver: IZOraclePlainDriver;
   ContextHandle: POCISvcCtx; const SQL: RawByteString; var Handle: POCIStmt;
   const ErrorHandle: POCIError; PrefetchMemory: ub4; ServerCachedStmtHandle: Boolean;
   const ConSettings: PZConSettings);
@@ -311,13 +283,13 @@ procedure PrepareOracleStatement(const PlainDriver: TZOraclePlainDriver;
   @param ErrorHandle a holder for Error handle.
   @returns a number of updates.
 }
-function GetOracleUpdateCount(const PlainDriver: TZOraclePlainDriver;
+function GetOracleUpdateCount(const PlainDriver: IZOraclePlainDriver;
   const Handle: POCIStmt; const ErrorHandle: POCIError): ub4;
 
-function DescribeObject(const PlainDriver: TZOraclePlainDriver; const Connection: IZConnection;
+function DescribeObject(const PlainDriver: IZOraclePlainDriver; const Connection: IZConnection;
   ParamHandle: POCIParam; {%H-}stmt_handle: POCIHandle; Level: ub2): POCIObject;
 
-procedure OraWriteLob(const PlainDriver: TZOraclePlainDriver; const BlobData: Pointer;
+procedure OraWriteLob(const PlainDriver: IZOraclePlainDriver; const BlobData: Pointer;
   const ContextHandle: POCISvcCtx; const ErrorHandle: POCIError;
   const LobLocator: POCILobLocator; const ChunkSize: Integer;
   BlobSize: Int64; Const BinaryLob: Boolean; const ConSettings: PZConSettings);
@@ -325,7 +297,7 @@ procedure OraWriteLob(const PlainDriver: TZOraclePlainDriver; const BlobData: Po
 implementation
 
 uses Math, ZMessages, ZDbcOracle, ZDbcOracleResultSet, ZDbcCachedResultSet,
-  ZDbcUtils, ZEncoding, ZFastCode, ZClasses
+  ZDbcUtils, ZEncoding, ZFastCode
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF};
 
 {**
@@ -354,7 +326,7 @@ end;
   @param ErrorHandle the OCI ErrorHandle
   @param ConSetttings the Pointer to the TZConSettings record
 }
-procedure FreeOracleSQLVars(const PlainDriver: TZOraclePlainDriver;
+procedure FreeOracleSQLVars(const PlainDriver: IZOraclePlainDriver;
   var Variables: PZSQLVars; const Iteration: Integer; const Handle: POCIEnv;
   const ErrorHandle: POCIError; const ConSettings: PZConSettings);
 var
@@ -377,12 +349,12 @@ var
     if Obj.Pinned then
       {Unpin tdo}
       //CheckOracleError(PlainDriver, ErrorHandle, //debug
-        PlainDriver.OCIObjectUnpin(Handle,ErrorHandle, CurrentVar^._Obj.tdo)
+        PlainDriver.ObjectUnpin(Handle,ErrorHandle, CurrentVar^._Obj.tdo)
         ;//debug, lcOther, 'OCIObjectUnpin', ConSettings);
     if (Obj.Level = 0) and assigned(Obj.tdo) then
       {Free Object}
       //debugCheckOracleError(PlainDriver, ErrorHandle,
-      PlainDriver.OCIObjectFree(Handle,ErrorHandle, CurrentVar^._Obj.tdo, 0)
+      PlainDriver.ObjectFree(Handle,ErrorHandle, CurrentVar^._Obj.tdo, 0)
       ;//debug, lcOther, 'OCIObjectFree', ConSettings);
     Dispose(Obj);
     Obj := nil;
@@ -394,13 +366,13 @@ begin
     for I := 0 to Variables.AllocNum-1 do begin
       {$R-}
       CurrentVar := @Variables.Variables[I];
-      {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
+      {$IFDEF RangeCheck} {$R+} {$ENDIF}
       if Assigned(CurrentVar^._Obj) then
         DisposeObject(CurrentVar^._Obj);
       if (CurrentVar^.Data <> nil) and (CurrentVar^.DescriptorType > 0) then
         for J := 0 to Iteration-1 do
           if ({%H-}PPOCIDescriptor({%H-}NativeUInt(CurrentVar^.Data)+(J*SizeOf(Pointer))))^ <> nil then
-            PlainDriver.OCIDescriptorFree({%H-}PPOCIDescriptor({%H-}NativeUInt(CurrentVar^.Data)+(J*SizeOf(Pointer)))^,
+            PlainDriver.DescriptorFree({%H-}PPOCIDescriptor({%H-}NativeUInt(CurrentVar^.Data)+(J*SizeOf(Pointer)))^,
               CurrentVar^.DescriptorType);
       if (CurrentVar^.lobs <> nil) then
         SetLength(CurrentVar^.lobs, 0);
@@ -428,16 +400,20 @@ begin
           TypeCode := SQLT_INT;
           Length := SizeOf(LongInt);
         end;
-      stUlong: begin
+      stUlong:
+        begin
           TypeCode := SQLT_STR;
           oDataSize := 23;
           Length := 23; //for trailing #0
         end;
       stLong:
-        if OCICanBindInt64 then begin
+        if OCICanBindInt64 then
+        begin
           TypeCode := SQLT_INT;
           Length := SizeOf(Int64);
-        end else begin
+        end
+        else
+        begin
           TypeCode := SQLT_FLT;
           Length := SizeOf(Double);
         end;
@@ -464,7 +440,8 @@ begin
               DescriptorType := OCI_DTYPE_INTERVAL_YM;
               Length := SizeOf(POCIInterval);
             end;
-          else begin //for all other DateTime vals we would loose msec precision...
+          else
+            begin //for all other DateTime vals we would loose msec precision...
               DescriptorType := OCI_DTYPE_TIMESTAMP;
               TypeCode := SQLT_TIMESTAMP;
               Length := SizeOf(POCIDateTime);
@@ -479,22 +456,28 @@ begin
       stString, stUnicodeString:
         if OracleType = SQLT_AFC then
           Length := oDataSize
-        else begin
+        else
+        begin
           TypeCode := SQLT_STR;
           Length := oDataSize + 1;
         end;
       stAsciiStream, stUnicodeStream, stBinaryStream, stBytes:
-        if (TypeCode in [SQLT_CLOB, SQLT_BLOB, SQLT_BFILEE, SQLT_CFILEE,SQLT_NTY]) then begin
+        if (TypeCode in [SQLT_CLOB, SQLT_BLOB, SQLT_BFILEE, SQLT_CFILEE,SQLT_NTY]) then
+        begin
           if not (OracleType = SQLT_NTY) then
             DescriptorType := OCI_DTYPE_LOB;
           Length := SizeOf(POCILobLocator);
-        end else begin
-          if ColType = stAsciiStream
-          then TypeCode := SQLT_LVC
-          else TypeCode := SQLT_LVB;
-          if oDataSize = 0
-          then Length := 128 * 1024 + SizeOf(Integer)
-          else Length := oDataSize + SizeOf(Integer);
+        end
+        else
+        begin
+          if ColType = stAsciiStream then
+            TypeCode := SQLT_LVC
+          else
+            TypeCode := SQLT_LVB;
+          if oDataSize = 0 then
+            Length := 128 * 1024 + SizeOf(Integer)
+          else
+            Length := oDataSize + SizeOf(Integer);
         end;
       stDataSet: ; //Do nothing here!
       stUnknown:
@@ -505,7 +488,8 @@ end;
 procedure SetVariableDataEntrys(var BufferEntry: PAnsiChar; var Variable: PZSQLVar;
   Iteration: NativeUInt);
 begin
-  with Variable^ do begin
+  with Variable^ do
+  begin
   {now let's set binding entrys}
   //step one: set null indicators
     oIndicatorArray := Pointer(BufferEntry);
@@ -528,7 +512,7 @@ begin
     );
 end;
 
-procedure AllocDesriptors(const PlainDriver: TZOraclePlainDriver;
+procedure AllocDesriptors(const PlainDriver: IZOraclePlainDriver;
   ConnectionHandle: POCIEnv; var Variable: PZSQLVar; Iteration: Integer;
   AllocTemporyLobs: Boolean);
 var
@@ -537,7 +521,7 @@ begin
   if Variable^.DescriptorType > 0 then
   begin
     for i := 0 to Iteration -1 do
-      PlainDriver.OCIDescriptorAlloc(ConnectionHandle,
+      PlainDriver.DescriptorAlloc(ConnectionHandle,
         {%H-}PPOCIDescriptor({%H-}NativeUInt(Variable^.Data)+(I*SizeOf(POCIDescriptor)))^, Variable^.DescriptorType, 0, nil);
     if AllocTemporyLobs and (Variable^.DescriptorType = OCI_DTYPE_LOB) then
     SetLength(Variable^.lobs, Iteration);
@@ -554,7 +538,7 @@ end;
   @param ChunkSize the size in bytes we send the lobs in chunks
   @param Iteration the Iters we can use
 }
-procedure LoadOracleVar(const PlainDriver: TZOraclePlainDriver;
+procedure LoadOracleVar(const PlainDriver: IZOraclePlainDriver;
   const Connection: IZConnection; const ErrorHandle: POCIError;
   const Variable: PZSQLVar; var Value: TZVariant; ChunkSize: Integer;
   Iteration: Integer);
@@ -591,12 +575,8 @@ var
   ZExtendedArray: TExtendedDynArray absolute ZData;
   ZDateTimeArray: TDateTimeDynArray absolute ZData;
   ZRawByteStringArray: TRawByteStringDynArray absolute ZData;
-  {$IFNDEF NO_ANSISTRING}
   ZAnsiStringArray: TAnsiStringDynArray absolute ZData;
-  {$ENDIF}
-  {$IFNDEF NO_UTF8STRING}
   ZUTF8StringArray: TUTF8StringDynArray absolute ZData;
-  {$ENDIF}
   ZStringArray: TStringDynArray absolute ZData;
   ZUnicodeStringArray: TUnicodeStringDynArray absolute ZData;
   ZCharRecArray: TZCharRecDynArray absolute ZData;
@@ -611,7 +591,7 @@ var
     {$R-}
     Variable^.oIndicatorArray^[I] := -1;
     Variable^.oDataSizeArray^[i] := 1; //place of #0
-    {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
     ({%H-}PAnsiChar({%H-}NativeUInt(Variable^.Data)+I*Variable^.Length))^ := #0; //OCI expects the trailing $0 byte
   end;
   procedure MoveString(Const Data: Pointer; Iter: LongWord);
@@ -619,13 +599,13 @@ var
     {$R-}
     {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Data^, {%H-}Pointer({%H-}NativeUInt(Variable^.Data)+Iter*Variable^.Length)^, Variable^.oDataSizeArray^[Iter]);
     ({%H-}PAnsiChar({%H-}NativeUInt(Variable^.Data)+Iter*Variable^.Length)+Variable^.oDataSizeArray^[Iter]-1)^ := #0; //improve  StrLCopy... set a leadin #0 if truncation happens
-    {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
+    {$IFDEF RangeCheck} {$R+} {$ENDIF}
   end;
 begin
   OracleConnection := Connection as IZOracleConnection;
   ClientVarManager := Connection.GetClientVariantManager;
   ConSettings := Connection.GetConSettings;
-  if (Iteration = 1) and (Value.VType <> vtArray) then
+  if Iteration = 1 then
   { single row execution }
   begin
     if ClientVarManager.IsNull(Value) then
@@ -653,7 +633,7 @@ begin
             DecodeDate(TempDate, Year, Month, Day);
             DecodeTime(TempDate, Hour, Min, Sec, MSec);
             CheckOracleError(PlainDriver, ErrorHandle,
-              PlainDriver.OCIDateTimeConstruct(OracleConnection.GetConnectionHandle,
+              PlainDriver.DateTimeConstruct(OracleConnection.GetConnectionHandle,
                 ErrorHandle, PPOCIDescriptor(Variable^.Data)^,
                 Year, Month, Day, Hour, Min, Sec, MSec * 1000000, nil, 0),
               lcOther, '', ConSettings);
@@ -850,7 +830,6 @@ begin
                   Variable^.oDataSizeArray^[i] := Math.Min(Length(AnsiTemp)+1, LengthInt(Variable^.Length));
                   MoveString(Pointer(AnsiTemp), I);
                 end;
-            {$IFNDEF NO_ANSISTRING}
             vtAnsiString:
               for i := 0 to Iteration -1 do
                 if (Variable^.oIndicatorArray^[I] = -1) or (Pointer(ZAnsiStringArray[I]) = nil) then //Length = 0
@@ -861,8 +840,6 @@ begin
                   Variable^.oDataSizeArray^[i] := Math.Min(Length(AnsiTemp)+1, LengthInt(Variable^.Length));
                   MoveString(Pointer(AnsiTemp), I);
                 end;
-            {$ENDIF}
-            {$IFNDEF NO_UTF8STRING}
             vtUTF8String:
               if ZCompatibleCodePages(zCP_UTF8, ConSettings^.ClientCodePage^.CP) then
                 for i := 0 to Iteration -1 do
@@ -883,7 +860,6 @@ begin
                     Variable^.oDataSizeArray^[i] := Math.Min(Length(AnsiTemp)+1, LengthInt(Variable^.Length));
                     MoveString(Pointer(AnsiTemp), I);
                   end;
-            {$ENDIF}
             vtRawByteString:
               for i := 0 to Iteration -1 do
                 if (Variable^.oIndicatorArray^[I] = -1) or (Pointer(ZRawByteStringArray[I]) = nil) then //Length = 0
@@ -970,7 +946,7 @@ begin
           for i := 0 to Iteration -1 do
             if (Variable^.oIndicatorArray^[I] = 0) then
             begin
-              AnsiTemp := GUIDToRaw(ZGUIDArray[I]);
+              AnsiTemp := {$IFDEF UNICODE}UnicodeStringToASCII7{$ENDIF}(GuidToString(ZGUIDArray[I]));
               Variable^.oDataSizeArray^[i] := 39;
               {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Pointer(AnsiTemp)^, {%H-}Pointer({%H-}NativeUInt(Variable^.Data)+I*39)^, 39);
             end;
@@ -981,7 +957,7 @@ begin
               DecodeDate(ZDateTimeArray[i], Year, Month, Day);
               DecodeTime(ZDateTimeArray[i], Hour, Min, Sec, MSec);
               CheckOracleError(PlainDriver, ErrorHandle,
-                PlainDriver.OCIDateTimeConstruct(OracleConnection.GetConnectionHandle,
+                PlainDriver.DateTimeConstruct(OracleConnection.GetConnectionHandle,
                   ErrorHandle, {%H-}PPOCIDescriptor({%H-}NativeUInt(Variable^.Data)+I*SizeOf(PPOCIDescriptor))^, //direct addressing descriptore to array. So we don't need to free the mem again
                   Year, Month, Day, Hour, Min, Sec, MSec * 1000000, nil, 0),
                 lcOther, 'OCIDateTimeConstruct', ConSettings);
@@ -1032,24 +1008,24 @@ begin
             end;
       end;
   end;
-  {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
+ {$IFDEF RangeCheck} {$R+} {$ENDIF}
 end;
 
 {**
   Unloads Oracle variables binded to SQL statement with data.
   @param Variables Oracle variable holders.
 }
-procedure UnloadOracleVars(var Variables: PZSQLVars);
+procedure UnloadOracleVars(var Variables: PZSQLVars; const Iteration: Integer);
 var
   I: Integer;
   J: LongWord;
 begin
   for i := 0 to Variables^.AllocNum -1 do
-    {$R-}
     if (Variables^.Variables[i].DescriptorType > 0) and (Length(Variables^.Variables[i].Lobs) > 0) then
-      for j := 0 to High(Variables^.Variables[i].Lobs) do
+      for j := 0 to Iteration -1 do
+        {$R-}
         Variables^.Variables[i].Lobs[j] := nil;
-    {$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
+        {$IFDEF RangeCheck} {$R+} {$ENDIF}
 end;
 
 {**
@@ -1121,16 +1097,16 @@ end;
   @param LogCategory a logging category.
   @param LogMessage a logging message.
 }
-procedure CheckOracleError(const PlainDriver: TZOraclePlainDriver;
+procedure CheckOracleError(const PlainDriver: IZOraclePlainDriver;
   const ErrorHandle: POCIError; const Status: Integer;
   const LogCategory: TZLoggingCategory; const LogMessage: RawByteString;
   const ConSettings: PZConSettings);
 var
   ErrorMessage: RawByteString;
-  ErrorBuffer: TRawBuff;
+  ErrorBuffer: array[0..255] of AnsiChar;
   ErrorCode: SB4;
 begin
-  ErrorBuffer.Pos := 0;
+  ErrorMessage := '';
   ErrorCode := Status;
 
   case Status of
@@ -1138,20 +1114,21 @@ begin
       Exit;
     OCI_SUCCESS_WITH_INFO:
       begin
-        PlainDriver.OCIErrorGet(ErrorHandle, 1, nil, ErrorCode, @ErrorBuffer.Buf[0], SizeOf(ErrorBuffer.Buf)-1, OCI_HTYPE_ERROR);
-        ErrorBuffer.Pos := StrLen(@ErrorBuffer.Buf[0])+1;
-        ErrorMessage := 'OCI_SUCCESS_WITH_INFO: ';
+        PlainDriver.ErrorGet(ErrorHandle, 1, nil, ErrorCode, ErrorBuffer, 255,
+          OCI_HTYPE_ERROR);
+        ErrorMessage := 'OCI_SUCCESS_WITH_INFO: ' + RawByteString(ErrorBuffer);
       end;
-    OCI_NEED_DATA:  ErrorMessage := 'OCI_NEED_DATA';
-    OCI_NO_DATA:    ErrorMessage := 'OCI_NO_DATA';
+    OCI_NEED_DATA:
+      ErrorMessage := 'OCI_NEED_DATA';
+    OCI_NO_DATA:
+      ErrorMessage := 'OCI_NO_DATA';
     OCI_ERROR:
       begin
-        if PlainDriver.OCIErrorGet(ErrorHandle, 1, nil, ErrorCode, @ErrorBuffer.Buf[0], SizeOf(ErrorBuffer.Buf)-1, OCI_HTYPE_ERROR) = 100
-        then ErrorMessage := 'OCI_ERROR: Unkown(OCI_NO_DATA)'
-        else begin
-          ErrorMessage := 'OCI_ERROR: ';
-          ErrorBuffer.Pos := StrLen(@ErrorBuffer.Buf[0])+1;
-        end;
+        if PlainDriver.ErrorGet(ErrorHandle, 1, nil, ErrorCode, ErrorBuffer, 255,
+          OCI_HTYPE_ERROR) = 100 then
+          ErrorMessage := 'OCI_ERROR: Unkown(OCI_NO_DATA)'
+        else
+          ErrorMessage := 'OCI_ERROR: ' + RawByteString(ErrorBuffer);
       end;
     OCI_INVALID_HANDLE:
       ErrorMessage := 'OCI_INVALID_HANDLE';
@@ -1159,11 +1136,9 @@ begin
       ErrorMessage := 'OCI_STILL_EXECUTING';
     OCI_CONTINUE:
       ErrorMessage := 'OCI_CONTINUE';
-    else ErrorMessage := '';
   end;
-  FlushBuff(ErrorBuffer, ErrorMessage);
 
-  if (Status <> OCI_SUCCESS_WITH_INFO) and (ErrorMessage <> '') then
+  if (Status <> OCI_SUCCESS) and (Status <> OCI_SUCCESS_WITH_INFO) and (ErrorMessage <> '') then
   begin
     if Assigned(DriverManager) then //Thread-Safe patch
       DriverManager.LogError(LogCategory, ConSettings^.Protocol, LogMessage,
@@ -1182,14 +1157,14 @@ end;
   Creates an Oracle result set based on the current settings.
   @return a created result set object.
 }
-function CreateOracleResultSet(
+function CreateOracleResultSet(const PlainDriver: IZOraclePlainDriver;
   const Statement: IZStatement; const LogSQL: string; const Handle: POCIStmt;
   const ErrorHandle: POCIError; ZBufferSize: Integer): IZResultSet;
 var
   NativeResultSet: TZOracleResultSet;
   CachedResultSet: TZCachedResultSet;
 begin
-  NativeResultSet := TZOracleResultSet.Create(Statement,
+  NativeResultSet := TZOracleResultSet.Create(PlainDriver, Statement,
     LogSQL, Handle, ErrorHandle, ZBufferSize);
   NativeResultSet.SetConcurrency(rcReadOnly);
   if (Statement.GetResultSetConcurrency = rcUpdatable)
@@ -1210,7 +1185,7 @@ end;
   Creates an Oracle result set based on the current settings.
   @return a created result set object.
 }
-function CreateOracleResultSet(
+function CreateOracleResultSet(const PlainDriver: IZOraclePlainDriver;
       const Statement: IZStatement; const LogSQL: string; StmtHandle: POCIStmt;
       ErrorHandle: POCIError; const Params: PZSQLVars;
       Const OracleParams: TZOracleParams): IZResultSet;
@@ -1218,7 +1193,7 @@ var
   NativeResultSet: TZOracleCallableResultSet;
   CachedResultSet: TZCachedResultSet;
 begin
-  NativeResultSet := TZOracleCallableResultSet.Create(Statement,
+  NativeResultSet := TZOracleCallableResultSet.Create(PlainDriver, Statement,
     LogSQL, StmtHandle, ErrorHandle, Params, OracleParams);
   NativeResultSet.SetConcurrency(rcReadOnly);
   CachedResultSet := TZCachedResultSet.Create(NativeResultSet, LogSQL, nil,
@@ -1238,7 +1213,7 @@ end;
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure AllocateOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
+procedure AllocateOracleStatementHandles(const PlainDriver: IZOraclePlainDriver;
   const Connection: IZConnection; var Handle: POCIStmt; var ErrorHandle: POCIError;
   UserServerCachedStmt: Boolean);
 var
@@ -1246,11 +1221,11 @@ var
 begin
   OracleConnection := Connection as IZOracleConnection;
   ErrorHandle := nil;
-  PlainDriver.OCIHandleAlloc(OracleConnection.GetConnectionHandle,
+  PlainDriver.HandleAlloc(OracleConnection.GetConnectionHandle,
     ErrorHandle, OCI_HTYPE_ERROR, 0, nil);
   Handle := nil;
   //if not UserServerCachedStmt then
-    PlainDriver.OCIHandleAlloc(OracleConnection.GetConnectionHandle,
+    PlainDriver.HandleAlloc(OracleConnection.GetConnectionHandle,
       Handle, OCI_HTYPE_STMT, 0, nil);
 end;
 
@@ -1260,17 +1235,17 @@ end;
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure FreeOracleStatementHandles(const PlainDriver: TZOraclePlainDriver;
+procedure FreeOracleStatementHandles(const PlainDriver: IZOraclePlainDriver;
   var Handle: POCIStmt; var ErrorHandle: POCIError);
 begin
   if ErrorHandle <> nil then
   begin
-    PlainDriver.OCIHandleFree(ErrorHandle, OCI_HTYPE_ERROR);
+    PlainDriver.HandleFree(ErrorHandle, OCI_HTYPE_ERROR);
     ErrorHandle := nil;
   end;
   if Handle <> nil then
   begin
-    PlainDriver.OCIHandleFree(Handle, OCI_HTYPE_STMT);
+    PlainDriver.HandleFree(Handle, OCI_HTYPE_STMT);
     Handle := nil;
   end;
 end;
@@ -1282,7 +1257,7 @@ end;
   @param Handle a holder for Statement handle.
   @param ErrorHandle a holder for Error handle.
 }
-procedure PrepareOracleStatement(const PlainDriver: TZOraclePlainDriver;
+procedure PrepareOracleStatement(const PlainDriver: IZOraclePlainDriver;
   ContextHandle: POCISvcCtx; const SQL: RawByteString; var Handle: POCIStmt;
   const ErrorHandle: POCIError; PrefetchMemory: ub4; ServerCachedStmtHandle: Boolean;
   const ConSettings: PZConSettings);
@@ -1294,25 +1269,25 @@ begin
   begin
     {indicate length + 1! see: https://sourceforge.net/p/zeoslib/tickets/93/}
     CheckOracleError(PlainDriver, ErrorHandle,
-      PlainDriver.OCIStmtPrepare2(ContextHandle, Handle, ErrorHandle,
+      PlainDriver.StmtPrepare2(ContextHandle, Handle, ErrorHandle,
         Pointer(SQL), Length(SQL)+1,nil,0,OCI_NTV_SYNTAX,OCI_DEFAULT),
       lcExecute, SQL, ConSettings);
     CheckOracleError(PlainDriver, ErrorHandle,
-     PlainDriver.OCIAttrSet(Handle,OCI_HTYPE_STMT, @PrefetchCount ,0, OCI_ATTR_PREFETCH_ROWS,ErrorHandle),
+     PlainDriver.AttrSet(Handle,OCI_HTYPE_STMT, @PrefetchCount ,0, OCI_ATTR_PREFETCH_ROWS,ErrorHandle),
         lcOther, 'Prefetch_Count', ConSettings);
     CheckOracleError(PlainDriver, ErrorHandle,
-      PlainDriver.OCIAttrSet(Handle,OCI_HTYPE_STMT,@PrefetchMemory,0,OCI_ATTR_PREFETCH_MEMORY,ErrorHandle),
+      PlainDriver.AttrSet(Handle,OCI_HTYPE_STMT,@PrefetchMemory,0,OCI_ATTR_PREFETCH_MEMORY,ErrorHandle),
         lcOther, 'Prefetch_Memory', ConSettings);
   end
   else
   begin
     CheckOracleError(PlainDriver, ErrorHandle,
-     PlainDriver.OCIAttrSet(Handle,OCI_HTYPE_STMT, @PrefetchCount ,0, OCI_ATTR_PREFETCH_ROWS,ErrorHandle),
+     PlainDriver.AttrSet(Handle,OCI_HTYPE_STMT, @PrefetchCount ,0, OCI_ATTR_PREFETCH_ROWS,ErrorHandle),
         lcOther, 'Prefetch_Count', ConSettings);
     CheckOracleError(PlainDriver, ErrorHandle,
-      PlainDriver.OCIAttrSet(Handle,OCI_HTYPE_STMT,@PrefetchMemory,0,OCI_ATTR_PREFETCH_MEMORY,ErrorHandle),
+      PlainDriver.AttrSet(Handle,OCI_HTYPE_STMT,@PrefetchMemory,0,OCI_ATTR_PREFETCH_MEMORY,ErrorHandle),
         lcOther, 'Prefetch_Memory', ConSettings);
-    CheckOracleError(PlainDriver, ErrorHandle, PlainDriver.OCIStmtPrepare(Handle,
+    CheckOracleError(PlainDriver, ErrorHandle, PlainDriver.StmtPrepare(Handle,
       ErrorHandle, Pointer(SQL), Length(SQL)+1, OCI_NTV_SYNTAX, OCI_DEFAULT),
       lcExecute, SQL, ConSettings);
   end;
@@ -1325,11 +1300,11 @@ end;
   @param ErrorHandle a holder for Error handle.
   @returns a number of updates.
 }
-function GetOracleUpdateCount(const PlainDriver: TZOraclePlainDriver;
+function GetOracleUpdateCount(const PlainDriver: IZOraclePlainDriver;
   const Handle: POCIStmt; const ErrorHandle: POCIError): ub4;
 begin
   Result := 0;
-  PlainDriver.OCIAttrGet(Handle, OCI_HTYPE_STMT, @Result, nil,
+  PlainDriver.AttrGet(Handle, OCI_HTYPE_STMT, @Result, nil,
     OCI_ATTR_ROW_COUNT, ErrorHandle);
 end;
 
@@ -1337,7 +1312,7 @@ end;
   recurses down the field's TDOs and saves the little bits it need for later
   use on a fetch SQLVar._obj
 }
-function DescribeObject(const PlainDriver: TZOraclePlainDriver; const Connection: IZConnection;
+function DescribeObject(const PlainDriver: IZOraclePlainDriver; const Connection: IZConnection;
   ParamHandle: POCIParam; stmt_handle: POCIHandle; Level: ub2): POCIObject;
 var
   type_ref: POCIRef;
@@ -1349,7 +1324,7 @@ var
     FillChar(Result^, SizeOf(TOCIObject), {$IFDEF Use_FastCodeFillChar}#0{$ELSE}0{$ENDIF});
   end;
 
-  procedure DescribeObjectByTDO(const PlainDriver: TZOraclePlainDriver;
+  procedure DescribeObjectByTDO(const PlainDriver: IZOraclePlainDriver;
     const Connection: IZConnection; var obj: POCIObject);
   var
     FConnection: IZOracleConnection;
@@ -1363,7 +1338,7 @@ var
     FConnection := Connection as IZOracleConnection;
 
     CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-      PlainDriver.OCIDescribeAny(FConnection.GetContextHandle,
+      PlainDriver.DescribeAny(FConnection.GetContextHandle,
         FConnection.GetErrorHandle, obj.tdo, 0, OCI_OTYPE_PTR, OCI_DEFAULT,
         OCI_PTYPE_TYPE, FConnection.GetDescribeHandle),
       lcOther, 'OCIDescribeAny(OCI_PTYPE_TYPE) of OCI_OTYPE_PTR', ConSettings);
@@ -1371,13 +1346,13 @@ var
     //we have the Actual TDO  so lets see what it is made up of by a describe
     Len := 0;  //and we store it in the object's paramdp for now
     CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-      PlainDriver.OCIAttrGet(FConnection.GetDescribeHandle, OCI_HTYPE_DESCRIBE,
+      PlainDriver.AttrGet(FConnection.GetDescribeHandle, OCI_HTYPE_DESCRIBE,
         @obj.parmdp, @Len, OCI_ATTR_PARAM, FConnection.GetErrorHandle),
       lcOther, 'OCIAttrGet(OCI_HTYPE_DESCRIBE) of OCI_ATTR_PARAM', ConSettings);
 
     //Get the SchemaName of the Object
     CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-      PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+      PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
         @name, @len, OCI_ATTR_SCHEMA_NAME, FConnection.GetErrorHandle),
       lcOther, 'OCIAttrGet(OCI_ATTR_SCHEMA_NAME) of OCI_DTYPE_PARAM', ConSettings);
 
@@ -1387,7 +1362,7 @@ var
 
     //Get the TypeName of the Object
     CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-      PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+      PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
         @name, @len, OCI_ATTR_NAME, FConnection.GetErrorHandle),
       lcOther, 'OCIAttrGet(OCI_ATTR_NAME) of OCI_DTYPE_PARAM', ConSettings);
 
@@ -1397,7 +1372,7 @@ var
 
     //Get the TypeCode of the Object
     CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-      PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+      PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
         @Obj.typecode, nil, OCI_ATTR_TYPECODE, FConnection.GetErrorHandle),
       lcOther, 'OCIAttrGet(OCI_ATTR_TYPECODE) of OCI_DTYPE_PARAM', ConSettings);
 
@@ -1405,13 +1380,13 @@ var
     begin
       //we will need a reff to the TDO for the pin operation
       CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-        PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+        PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
           @Obj.obj_ref, nil, OCI_ATTR_REF_TDO, FConnection.GetErrorHandle),
         lcOther, 'OCIAttrGet(OCI_ATTR_REF_TDO) of OCI_DTYPE_PARAM', ConSettings);
 
       //now we'll pin the object
       CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-        PlainDriver.OCIObjectPin(FConnection.GetConnectionHandle, FConnection.GetErrorHandle,
+        PlainDriver.ObjectPin(FConnection.GetConnectionHandle, FConnection.GetErrorHandle,
           Obj.obj_ref, nil, OCI_PIN_LATEST, OCI_DURATION_SESSION, pub2(OCI_LOCK_NONE),
           @obj.obj_type),
         lcOther, 'OCIObjectPin(OCI_PIN_LATEST, OCI_DURATION_SESSION, OCI_LOCK_NONE)', ConSettings);
@@ -1419,13 +1394,13 @@ var
 
       //is the object the final type or an type-descriptor?
       CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-        PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+        PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
           @Obj.is_final_type, nil, OCI_ATTR_IS_FINAL_TYPE, FConnection.GetErrorHandle),
         lcOther, 'OCIAttrGet(OCI_ATTR_IS_FINAL_TYPE) of OCI_DTYPE_PARAM(SubType)', ConSettings);
 
       //Get the FieldCount
       CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-        PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+        PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
           @Obj.field_count, nil, OCI_ATTR_NUM_TYPE_ATTRS, FConnection.GetErrorHandle),
         lcOther, 'OCIAttrGet(OCI_ATTR_NUM_TYPE_ATTRS) of OCI_DTYPE_PARAM(SubType)', ConSettings);
 
@@ -1434,7 +1409,7 @@ var
 
       //a field is just another instance of an obj not a new struct
       CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-        PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+        PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
           @list_attibutes, nil, OCI_ATTR_LIST_TYPE_ATTRS, FConnection.GetErrorHandle),
         lcOther, 'OCIAttrGet(OCI_ATTR_LIST_TYPE_ATTRS) of OCI_DTYPE_PARAM(SubType)', ConSettings);
 
@@ -1445,14 +1420,14 @@ var
           Obj.fields[i] := Fld;  //assign the object to the field-list
 
           CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-            PlainDriver.OCIParamGet(list_attibutes, OCI_DTYPE_PARAM,
+            PlainDriver.ParamGet(list_attibutes, OCI_DTYPE_PARAM,
               FConnection.GetErrorHandle, Fld.parmdp, I+1),
             lcOther, 'OCIParamGet(OCI_DTYPE_PARAM) of OCI_DTYPE_PARAM(Element)', ConSettings);
 
           // get the name of the attribute
           len := 0;
           CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-            PlainDriver.OCIAttrGet(Fld.parmdp, OCI_DTYPE_PARAM,
+            PlainDriver.AttrGet(Fld.parmdp, OCI_DTYPE_PARAM,
               @name, @len, OCI_ATTR_NAME, FConnection.GetErrorHandle),
             lcOther, 'OCIAttrGet(OCI_ATTR_NAME) of OCI_DTYPE_PARAM(Element)', ConSettings);
 
@@ -1462,7 +1437,7 @@ var
 
           // get the typeCode of the attribute
           CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-            PlainDriver.OCIAttrGet(Fld.parmdp, OCI_DTYPE_PARAM,
+            PlainDriver.AttrGet(Fld.parmdp, OCI_DTYPE_PARAM,
               @Fld.typecode, nil, OCI_ATTR_TYPECODE, FConnection.GetErrorHandle),
             lcOther, 'OCIAttrGet(OCI_ATTR_TYPECODE) of OCI_DTYPE_PARAM(Element)', ConSettings);
 
@@ -1480,18 +1455,18 @@ var
         //this is an embedded table or varray of some form so find out what is in it*/
 
         CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-          PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+          PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
             @obj.col_typecode, nil, OCI_ATTR_COLLECTION_TYPECODE, FConnection.GetErrorHandle),
           lcOther, 'OCIAttrGet(OCI_ATTR_COLLECTION_TYPECODE) of OCI_DTYPE_PARAM', ConSettings);
 
         //first get what sort of collection it is by coll typecode
         CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-          PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+          PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
             @obj.parmap, nil, OCI_ATTR_COLLECTION_ELEMENT, FConnection.GetErrorHandle),
           lcOther, 'OCIAttrGet(OCI_ATTR_COLLECTION_ELEMENT) of OCI_DTYPE_PARAM', ConSettings);
 
         CheckOracleError(PlainDriver, FConnection.GetErrorHandle,
-          PlainDriver.OCIAttrGet(obj.parmdp, OCI_DTYPE_PARAM,
+          PlainDriver.AttrGet(obj.parmdp, OCI_DTYPE_PARAM,
             @obj.elem_typecode, nil, OCI_ATTR_TYPECODE, FConnection.GetErrorHandle),
           lcOther, 'OCIAttrGet(OCI_ATTR_TYPECODE of Element) of OCI_DTYPE_PARAM', ConSettings);
 
@@ -1513,12 +1488,12 @@ begin
 
   //Get the Actual TDO
   CheckOracleError(PlainDriver, (Connection as IZOracleConnection).GetErrorHandle,
-    PlainDriver.OCIAttrGet(ParamHandle, OCI_DTYPE_PARAM, @type_ref, nil,
+    PlainDriver.AttrGet(ParamHandle, OCI_DTYPE_PARAM, @type_ref, nil,
       OCI_ATTR_REF_TDO, (Connection as IZOracleConnection).GetErrorHandle),
     lcOther, 'OCIAttrGet OCI_ATTR_REF_TDO of OCI_DTYPE_PARAM', ConSettings);
 
   CheckOracleError(PlainDriver, (Connection as IZOracleConnection).GetErrorHandle,
-    PlainDriver.OCITypeByRef((Connection as IZOracleConnection).GetConnectionHandle,
+    PlainDriver.TypeByRef((Connection as IZOracleConnection).GetConnectionHandle,
       (Connection as IZOracleConnection).GetErrorHandle, type_ref,
       OCI_DURATION_TRANS, OCI_TYPEGET_ALL, @Result.tdo),
     lcOther, 'OCITypeByRef from OCI_ATTR_REF_TDO', ConSettings);
@@ -1526,7 +1501,7 @@ begin
   DescribeObjectByTDO(PlainDriver, Connection, Result);
 end;
 
-procedure OraWriteLob(const PlainDriver: TZOraclePlainDriver; const BlobData: Pointer;
+procedure OraWriteLob(const PlainDriver: IZOraclePlainDriver; const BlobData: Pointer;
   const ContextHandle: POCISvcCtx; const ErrorHandle: POCIError;
   const LobLocator: POCILobLocator; const ChunkSize: Integer;
   BlobSize: Int64; Const BinaryLob: Boolean; const ConSettings: PZConSettings);
@@ -1541,7 +1516,7 @@ var
     if BinaryLob then
     begin
       AContentSize := ContentSize;
-      Result := PlainDriver.OCILobWrite(ContextHandle, ErrorHandle, LobLocator,
+      Result := PlainDriver.LobWrite(ContextHandle, ErrorHandle, LobLocator,
         AContentSize, AOffSet, (PAnsiChar(BlobData)+OffSet), AChunkSize, APiece,
         nil, nil, 0, SQLCS_IMPLICIT);
     end
@@ -1555,7 +1530,7 @@ var
         AChunkSize := ConSettings^.ClientCodePage^.CharWidth;
       end;
 
-      Result := PlainDriver.OCILobWrite(ContextHandle, ErrorHandle, LobLocator,
+      Result := PlainDriver.LobWrite(ContextHandle, ErrorHandle, LobLocator,
         AContentSize, AOffSet, (PAnsiChar(BlobData)+OffSet), AChunkSize, APiece,
         nil, nil, ConSettings^.ClientCodePage^.ID, SQLCS_IMPLICIT);
     end;
@@ -1565,9 +1540,8 @@ var
 begin
 
   { Opens a large object or file for read. }
-  Status := PlainDriver.OCILobOpen(ContextHandle, ErrorHandle, LobLocator, OCI_LOB_READWRITE);
-  if Status <> OCI_SUCCESS then
-    CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Open Large Object', ConSettings);
+  Status := PlainDriver.LobOpen(ContextHandle, ErrorHandle, LobLocator, OCI_LOB_READWRITE);
+  CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Open Large Object', ConSettings);
 
   { Checks for empty blob.}
   { This test doesn't use IsEmpty because that function does allow for zero length blobs}
@@ -1585,27 +1559,33 @@ begin
         CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Write Large Object', ConSettings);
 
       if (BlobSize - OffSet) > ChunkSize then
-        while (BlobSize - OffSet) > ChunkSize do begin //take care there is room left for LastPiece
+        while (BlobSize - OffSet) > ChunkSize do //take care there is room left for LastPiece
+        begin
           Status := DoWrite(offset, ChunkSize, OCI_NEXT_PIECE);
           if Status <> OCI_NEED_DATA then
             CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Write Large Object', ConSettings);
         end;
       Status := DoWrite(offset, BlobSize - OffSet, OCI_LAST_PIECE);
-    end else begin
+    end
+    else
+    begin
       ContentSize := BlobSize;
-      Status := PlainDriver.OCILobWrite(ContextHandle, ErrorHandle, LobLocator,
+      Status := PlainDriver.LobWrite(ContextHandle, ErrorHandle, LobLocator,
         ContentSize, 1, BlobData, BlobSize, OCI_ONE_PIECE, nil, nil, 0, SQLCS_IMPLICIT);
     end;
-  end else
-    Status := PlainDriver.OCILobTrim(ContextHandle, ErrorHandle, LobLocator, 0);
+  end
+  else
+    Status := PlainDriver.LobTrim(ContextHandle, ErrorHandle, LobLocator, 0);
 
   CheckOracleError(PlainDriver, ErrorHandle,
     Status, lcOther, 'Write Large Object', ConSettings);
 
   { Closes large object or file. }
-  Status := PlainDriver.OCILobClose(ContextHandle, ErrorHandle, LobLocator);
-  if Status <> OCI_SUCCESS then
-    CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Close Large Object', ConSettings);
+  Status := PlainDriver.LobClose(ContextHandle, ErrorHandle, LobLocator);
+  CheckOracleError(PlainDriver, ErrorHandle, Status, lcOther, 'Close Large Object', ConSettings);
 end;
 
+
 end.
+
+

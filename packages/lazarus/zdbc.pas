@@ -7,9 +7,8 @@ unit zdbc;
 interface
 
 uses
-  ZDbcDbLib, ZDbcInterbase6, ZDbcIntfs, ZDbcMetadata, ZDbcMySql, 
-  ZDbcPostgreSql, ZDbcSqLite, ZDbcPooled, ZDbcODBCCon, ZDbcProperties, 
-  zdbcplatform;
+  ZDbcDbLib, ZDbcInterbase6, ZDbcIntfs, ZDbcMetadata, ZDbcMySql, ZDbcOracle, 
+  ZDbcPostgreSql, ZDbcSqLite, ZDbcASA, ZDbcPooled, ZDbcAdo;
 
 implementation
 

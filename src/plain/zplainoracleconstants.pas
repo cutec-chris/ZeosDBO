@@ -73,9 +73,9 @@ type
   sword   = Integer;
   psword  = ^sword;
   eword   = Integer;
-  uword   = Cardinal;
-  sb4     = LongInt;
-  ub4     = Cardinal;
+  uword   = LongInt;
+  sb4     = Integer;
+  ub4     = LongInt;
   sb2     = SmallInt;
   ub2     = Word;
   sb1     = ShortInt;
@@ -853,7 +853,6 @@ const
   OCI_OBJECTFREE_FORCE =1;
   OCI_OBJECTFREE_NONULL=2;
 
-  OCI_PREP2_CACHE_SEARCHONLY: ub4 = $0010;
 type
   PPointer = ^Pointer;
 

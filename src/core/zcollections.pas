@@ -55,7 +55,7 @@ interface
 
 {$I ZCore.inc}
 
-uses Classes, ZClasses, ZCompatibility;
+uses Classes, ZClasses;
 
 type
 
@@ -208,6 +208,10 @@ implementation
 
 uses SysUtils, ZMessages {$IFDEF FAST_MOVE}, ZFastCode{$ENDIF};
 
+{$IFDEF FPC}
+  {$HINTS OFF}
+{$ENDIF}
+
 { TZIterator }
 
 {**
@@ -267,11 +271,19 @@ end;
   @param Data a integer value to describe an error.
 }
 class procedure TZCollection.Error(const Msg: string; Data: Integer);
+
+{$IFNDEF FPC}
+  function ReturnAddr: Pointer;
+  asm
+          MOV     EAX,[EBP+4]
+  end;
+{$ENDIF}
+
 begin
   {$IFDEF FPC}
   raise EListError.CreateFmt(Msg,[Data]) at get_caller_addr(get_frame);
   {$ELSE}
-  raise EListError.CreateFmt(Msg, [Data]) at ReturnAddress;
+  raise EListError.CreateFmt(Msg, [Data]) at ReturnAddr;
   {$ENDIF}
 end;
 
@@ -300,10 +312,10 @@ end;
 }
 procedure TZCollection.SetCapacity(NewCapacity: Integer);
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (NewCapacity < FCount) or (NewCapacity > {$IFDEF WITH_MAXLISTSIZE_DEPRECATED}Maxint div 16{$ELSE}MaxListSize{$ENDIF}) then
     Error(SListCapacityError, NewCapacity);
-  {$ENDIF}
+{$ENDIF}
   if NewCapacity <> FCapacity then
   begin
     ReallocMem(FList, NewCapacity * SizeOf(IZInterface));
@@ -322,10 +334,10 @@ procedure TZCollection.SetCount(NewCount: Integer);
 var
   I: Integer;
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (NewCount < 0) or (NewCount > {$IFDEF WITH_MAXLISTSIZE_DEPRECATED}Maxint div 16{$ELSE}MaxListSize{$ENDIF}) then
     Error(SListCountError, NewCount);
-  {$ENDIF}
+{$ENDIF}
   if NewCount > FCapacity then
     SetCapacity(NewCount);
   if NewCount < FCount then
@@ -429,10 +441,10 @@ end;
 }
 procedure TZCollection.Delete(Index: Integer);
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (Index < 0) or (Index >= FCount) then
     Error(SListIndexError, Index);
-  {$ENDIF}
+{$ENDIF}
   FList^[Index] := nil;
   Dec(FCount);
   if Index < FCount then
@@ -453,12 +465,12 @@ procedure TZCollection.Exchange(Index1, Index2: Integer);
 var
   Item: IZInterface;
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (Index1 < 0) or (Index1 >= FCount) then
     Error(SListIndexError, Index1);
   if (Index2 < 0) or (Index2 >= FCount) then
     Error(SListIndexError, Index2);
-  {$ENDIF}
+{$ENDIF}
   Item := FList^[Index1];
   FList^[Index1] := FList^[Index2];
   FList^[Index2] := Item;
@@ -480,10 +492,10 @@ end;
 }
 function TZCollection.Get(Index: Integer): IZInterface;
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (Index < 0) or (Index >= FCount) then
     Error(SListIndexError, Index);
-  {$ENDIF}
+{$ENDIF}
   Result := FList^[Index];
 end;
 
@@ -556,10 +568,10 @@ end;
 }
 procedure TZCollection.Insert(Index: Integer; const Item: IZInterface);
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (Index < 0) or (Index > FCount) then
     Error(SListIndexError, Index);
-  {$ENDIF}
+{$ENDIF}
   if FCount = FCapacity then
     Grow;
   if Index < FCount then
@@ -589,10 +601,10 @@ end;
 }
 procedure TZCollection.Put(Index: Integer; const Item: IZInterface);
 begin
-  {$IFNDEF DISABLE_CHECKING}
+{$IFOPT R+}
   if (Index < 0) or (Index >= FCount) then
     Error(SListIndexError, Index);
-  {$ENDIF}
+{$ENDIF}
   FList^[Index] := Item;
 end;
 
@@ -680,8 +692,6 @@ procedure TZUnmodifiableCollection.RaiseException;
 begin
   raise EInvalidOperation.Create(SImmutableOpIsNotAllowed);
 end;
-
-{$IFDEF FPC} {$PUSH} {$WARN 5024 off : Parameter "$1" not used} {$ENDIF} // unmodifyable - parameters not used intentionally
 
 {**
   Adds a new object at the and of this collection.
@@ -855,8 +865,6 @@ function TZUnmodifiableCollection.ToString: string;
 begin
   Result := FCollection.ToString;
 end;
-
-{$IFDEF FPC} {$POP} {$ENDIF}
 
 { TZHashMap }
 

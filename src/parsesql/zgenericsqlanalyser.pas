@@ -55,9 +55,8 @@ interface
 
 {$I ZParseSql.inc}
 
-uses Classes, {$IFDEF MSEgui}mclasses,{$ENDIF}
-  {$IFNDEF NO_UNIT_CONTNRS}Contnrs,{$ENDIF}
-  ZClasses, ZTokenizer, ZSelectSchema;
+uses Classes, {$IFDEF MSEgui}mclasses,{$ENDIF} Contnrs,
+  ZClasses, ZTokenizer, ZSelectSchema, ZCompatibility;
 
 type
 
@@ -65,16 +64,15 @@ type
   TZStatementSection = class (TObject)
   private
     FName: string;
-    FTokens: TZTokenList;
+    FTokens: TStrings;
   public
-    constructor Create(const Name: string; {$IFDEF AUTOREFCOUNT}const{$ENDIF}
-      Tokens: TZTokenList);
+    constructor Create(const Name: string; Tokens: TStrings);
     destructor Destroy; override;
 
     function Clone: TZStatementSection;
 
     property Name: string read FName write FName;
-    property Tokens: TZTokenList read FTokens;
+    property Tokens: TStrings read FTokens;
   end;
 
   {** Implements a publicly available interface to statement analyser. }
@@ -82,13 +80,13 @@ type
     ['{967635B6-411B-4DEF-990C-9C6C01F3DC0A}']
 
     function TokenizeQuery(const Tokenizer: IZTokenizer; const SQL: string;
-      Cleanup: Boolean): TZTokenList;
-    function SplitSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList): TObjectList;
+      Cleanup: Boolean): TStrings;
+    function SplitSections(Tokens: TStrings): TObjectList;
 
-    function ComposeTokens({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList): string;
-    function ComposeSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}Sections: TObjectList): string;
+    function ComposeTokens(Tokens: TStrings): string;
+    function ComposeSections(Sections: TObjectList): string;
 
-    function DefineSelectSchemaFromSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}
+    function DefineSelectSchemaFromSections(
       Sections: TObjectList): IZSelectSchema;
     function DefineSelectSchemaFromQuery(const Tokenizer: IZTokenizer;
       const SQL: string): IZSelectSchema;
@@ -103,17 +101,17 @@ type
     FFromClauses: TStrings;
   protected
     function ArrayToStrings(const Value: array of string): TStrings;
-    function CheckForKeyword({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList;
-      TokenIndex: Integer; {$IFDEF AUTOREFCOUNT}const{$ENDIF}Keywords: TStrings;
-      out Keyword: string; out WordCount: Integer): Boolean;
-    function FindSectionTokens(Sections: TObjectList; const Name: string): TZTokenList;
+    function CheckForKeyword(Tokens: TStrings; TokenIndex: Integer;
+      Keywords: TStrings; var Keyword: string; var WordCount: Integer): Boolean;
+    function FindSectionTokens(Sections: TObjectList; const Name: string): TStrings;
 
-    procedure FillFieldRefs(const SelectSchema: IZSelectSchema; SelectTokens: TZTokenList);
-    procedure FillTableRefs(const SelectSchema: IZSelectSchema; FromTokens: TZTokenList);
+    procedure FillFieldRefs(const SelectSchema: IZSelectSchema; SelectTokens: TStrings);
+    procedure FillTableRefs(const SelectSchema: IZSelectSchema; FromTokens: TStrings);
 
-    function SkipOptionTokens(Tokens: TZTokenList; var TokenIndex: Integer;
+    function SkipOptionTokens(Tokens: TStrings; var TokenIndex: Integer;
       Options: TStrings): Boolean;
-    function SkipBracketTokens(Tokens: TZTokenList; var TokenIndex: Integer): Boolean;
+    function SkipBracketTokens(Tokens: TStrings; var TokenIndex: Integer):
+      Boolean;
 
     property SectionNames: TStrings read FSectionNames write FSectionNames;
     property SelectOptions: TStrings read FSelectOptions write FSelectOptions;
@@ -124,13 +122,13 @@ type
     destructor Destroy; override;
 
     function TokenizeQuery(const Tokenizer: IZTokenizer; const SQL: string;
-      Cleanup: Boolean): TZTokenList;
-    function SplitSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList): TObjectList;
+      Cleanup: Boolean): TStrings;
+    function SplitSections(Tokens: TStrings): TObjectList;
 
-    function ComposeTokens({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList): string;
-    function ComposeSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}Sections: TObjectList): string;
+    function ComposeTokens(Tokens: TStrings): string;
+    function ComposeSections(Sections: TObjectList): string;
 
-    function DefineSelectSchemaFromSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}
+    function DefineSelectSchemaFromSections(
       Sections: TObjectList): IZSelectSchema;
     function DefineSelectSchemaFromQuery(const Tokenizer: IZTokenizer;
       const SQL: string): IZSelectSchema;
@@ -145,8 +143,7 @@ uses SysUtils, ZSysUtils;
 {**
   Create SQL statement section object.
 }
-constructor TZStatementSection.Create(const Name: string;
-  {$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList);
+constructor TZStatementSection.Create(const Name: string; Tokens: TStrings);
 begin
   FName := Name;
   FTokens := Tokens;
@@ -157,7 +154,7 @@ end;
 }
 destructor TZStatementSection.Destroy;
 begin
-  FreeAndNil(FTokens);
+  FTokens.Free;
   inherited Destroy;
 end;
 
@@ -167,10 +164,10 @@ end;
 }
 function TZStatementSection.Clone: TZStatementSection;
 var
-  Temp: TZTokenList;
+  Temp: TStrings;
 begin
-  Temp := TZTokenList.Create;
-  Temp.Assign(FTokens);
+  Temp := TStringList.Create;
+  Temp.AddStrings(FTokens);
   Result := TZStatementSection.Create(FName, Temp);
 end;
 
@@ -209,10 +206,10 @@ end;
 }
 destructor TZGenericStatementAnalyser.Destroy;
 begin
-  FreeAndNil(FSectionNames);
-  FreeAndNil(FSelectOptions);
-  FreeAndNil(FFromJoins);
-  FreeAndNil(FFromClauses);
+  FSectionNames.Free;
+  FSelectOptions.Free;
+  FFromJoins.Free;
+  FFromClauses.Free;
   inherited Destroy;
 end;
 
@@ -239,9 +236,9 @@ end;
   @param Keyword an out parameter with found keyword.
   @param WordCount a count of words in the found keyword.
 }
-function TZGenericStatementAnalyser.CheckForKeyword({$IFDEF AUTOREFCOUNT}const{$ENDIF}Tokens: TZTokenList;
-  TokenIndex: Integer; {$IFDEF AUTOREFCOUNT}const{$ENDIF}Keywords: TStrings;
-  out Keyword: string; out WordCount: Integer): Boolean;
+function TZGenericStatementAnalyser.CheckForKeyword(Tokens: TStrings;
+  TokenIndex: Integer; Keywords: TStrings; var Keyword: string;
+  var WordCount: Integer): Boolean;
 var
   I: Integer;
 begin
@@ -249,30 +246,37 @@ begin
   Keyword := '';
   Result := False;
 
-  for I := 1 to 3 do begin
+  for I := 1 to 3 do
+  begin
     if (Tokens.Count <= TokenIndex) then
       Break;
-    if Tokens[TokenIndex].TokenType <> ttWord then
+    if TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+      Tokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF}) <> ttWord then
       Break;
     if Keyword <> '' then
       Keyword := Keyword + '*';
-    Keyword := Keyword + AnsiUpperCase(Tokens.AsString(TokenIndex));
+    Keyword := Keyword + AnsiUpperCase(Tokens[TokenIndex]);
     Inc(WordCount);
-    if Keywords.IndexOf(Keyword) >= 0 then begin
+    if Keywords.IndexOf(Keyword) >= 0 then
+    begin
       Result := True;
       Break;
     end;
     Inc(TokenIndex);
     { Skips whitespaces. }
-    while Tokens.Count > TokenIndex do begin
-      if not (Tokens[TokenIndex]^.TokenType in [ttWhitespace, ttComment]) then
+    while Tokens.Count > TokenIndex do
+    begin
+      if not (TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+        Tokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF})
+        in [ttWhitespace, ttComment]) then
         Break;
       Inc(TokenIndex);
       Inc(WordCount);
     end;
   end;
 
-  if not Result then begin
+  if not Result then
+  begin
     WordCount := 0;
     Keyword := '';
   end;
@@ -286,15 +290,17 @@ end;
     if section is was not found.
 }
 function TZGenericStatementAnalyser.FindSectionTokens(
-  Sections: TObjectList; const Name: string): TZTokenList;
+  Sections: TObjectList; const Name: string): TStrings;
 var
   I: Integer;
   Current: TZStatementSection;
 begin
   Result := nil;
-  for I := 0 to Sections.Count - 1 do begin
+  for I := 0 to Sections.Count - 1 do
+  begin
     Current := TZStatementSection(Sections[I]);
-    if Current.Name = Name then begin
+    if Current.Name = Name then
+    begin
       Result := Current.Tokens;
       Break;
     end;
@@ -308,12 +314,14 @@ end;
   @return a list with tokens.
 }
 function TZGenericStatementAnalyser.TokenizeQuery(
-  const Tokenizer: IZTokenizer; const SQL: string; Cleanup: Boolean): TZTokenList;
+  const Tokenizer: IZTokenizer; const SQL: string; Cleanup: Boolean): TStrings;
 begin
-  if Cleanup
-  then Result := Tokenizer.TokenizeBufferToList(SQL,
+  if Cleanup then
+  begin
+    Result := Tokenizer.TokenizeBufferToList(SQL,
       [toSkipEOF, toSkipComments, toUnifyWhitespaces])
-  else Result := Tokenizer.TokenizeBufferToList(SQL, [toSkipEOF]);
+  end else
+    Result := Tokenizer.TokenizeBufferToList(SQL, [toSkipEOF]);
 end;
 
 {**
@@ -323,14 +331,13 @@ end;
     a list of tokens in the section. It initial list is not started
     with a section name the first section is unnamed ('').
 }
-function TZGenericStatementAnalyser.SplitSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}
-  Tokens: TZTokenList): TObjectList;
+function TZGenericStatementAnalyser.SplitSections(Tokens: TStrings): TObjectList;
 var
   I: Integer;
   Keyword: string;
   WordCount: Integer;
   TokenIndex: Integer;
-  Elements: TZTokenList;
+  Elements: TStrings;
   FoundSection: Boolean;
   BracketCount: Integer;
 begin
@@ -340,23 +347,29 @@ begin
   Elements := nil;
   CheckForKeyword(Tokens, TokenIndex, SectionNames, Keyword{%H-}, WordCount{%H-});
 
-  while TokenIndex < Tokens.Count do begin
-    if FoundSection then begin
-      Elements := TZTokenList.Create;
+  while TokenIndex < Tokens.Count do
+  begin
+    if FoundSection then
+    begin
+      Elements := TStringList.Create;
       for I := 0 to WordCount - 1 do
-        Elements.Add(Tokens[TokenIndex + I]^);
+      begin
+        Elements.AddObject(Tokens[TokenIndex + I],
+          Tokens.Objects[TokenIndex + I]);
+      end;
       Inc(TokenIndex, WordCount);
       Result.Add(TZStatementSection.Create(Keyword, Elements));
     end;
     FoundSection := CheckForKeyword(Tokens, TokenIndex, SectionNames,
       Keyword, WordCount);
-    if not FoundSection and (TokenIndex < Tokens.Count) then begin
+    if not FoundSection and (TokenIndex < Tokens.Count) then
+    begin
       BracketCount := 0;
       repeat
-        Elements.Add(Tokens[TokenIndex]^);
-        if Tokens.AsString(TokenIndex) = '(' then
+        Elements.AddObject(Tokens[TokenIndex], Tokens.Objects[TokenIndex]);
+        if Tokens[TokenIndex] = '(' then
           Inc(BracketCount)
-        else if Tokens.AsString(TokenIndex) = ')' then
+        else if Tokens[TokenIndex] = ')' then
           Dec(BracketCount);
         Inc(TokenIndex);
       until (BracketCount <= 0) or (TokenIndex >= Tokens.Count);
@@ -369,10 +382,9 @@ end;
   @param Tokens a list of tokens.
   @returns a composes string.
 }
-function TZGenericStatementAnalyser.ComposeTokens({$IFDEF AUTOREFCOUNT}const{$ENDIF}
-  Tokens: TZTokenList): string;
+function TZGenericStatementAnalyser.ComposeTokens(Tokens: TStrings): string;
 begin
-  Result := Tokens.AsString;
+  Result := ComposeString(Tokens, '');
 end;
 
 {**
@@ -380,8 +392,7 @@ end;
   @param Tokens a list of statement sections.
   @returns a composes string.
 }
-function TZGenericStatementAnalyser.ComposeSections({$IFDEF AUTOREFCOUNT}const{$ENDIF}
-  Sections: TObjectList): string;
+function TZGenericStatementAnalyser.ComposeSections(Sections: TObjectList): string;
 var
   I: Integer;
 begin
@@ -396,13 +407,15 @@ end;
   @param TokenIndex the index of the current token.
   @return <code>true</code> if some tokens were skipped.
 }
-function TZGenericStatementAnalyser.SkipBracketTokens(Tokens: TZTokenList;
+function TZGenericStatementAnalyser.SkipBracketTokens(Tokens: TStrings;
   var TokenIndex: Integer): Boolean;
 var
   BracketCount: Integer;
+  Current: string;
 begin
   { Checks for the start bracket. }
-  if (TokenIndex < Tokens.Count) and not Tokens.IsEqual(TokenIndex, Char('(')) then begin
+  if (TokenIndex < Tokens.Count) and (Tokens[TokenIndex] <> '(') then
+  begin
     Result := False;
     Exit;
   end;
@@ -411,10 +424,12 @@ begin
   Result := True;
   BracketCount := 1;
   Inc(TokenIndex);
-  while (TokenIndex < Tokens.Count) and (BracketCount > 0) do begin
-    if Tokens.IsEqual(TokenIndex, Char('(')) then
+  while (TokenIndex < Tokens.Count) and (BracketCount > 0) do
+  begin
+    Current := Tokens[TokenIndex];
+    if Current = '(' then
       Inc(BracketCount)
-    else if Tokens.IsEqual(TokenIndex, Char(')')) then
+    else if Current = ')' then
       Dec(BracketCount);
     Inc(TokenIndex);
   end;
@@ -427,14 +442,19 @@ end;
   @param Options a list of option keyword strings in the upper case.
   @return <code>true</code> if some tokens were skipped.
 }
-function TZGenericStatementAnalyser.SkipOptionTokens(Tokens: TZTokenList;
+function TZGenericStatementAnalyser.SkipOptionTokens(Tokens: TStrings;
   var TokenIndex: Integer; Options: TStrings): Boolean;
 begin
   Result := False;
-  while TokenIndex < Tokens.Count do begin
-    if not (Tokens[TokenIndex]^.TokenType in [ttWhitespace, ttComment])
-       and (Options.IndexOf(UpperCase(Tokens.AsString(TokenIndex))) < 0) then
+  while TokenIndex < Tokens.Count do
+  begin
+    if not (TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+      Tokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF})
+      in [ttWhitespace, ttComment])
+      and (Options.IndexOf(AnsiUpperCase(Tokens[TokenIndex])) < 0) then
+    begin
       Break;
+    end;
     Inc(TokenIndex);
     Result := True;
   end;
@@ -446,7 +466,7 @@ end;
   @param SelectTokens a list of tokens in select section.
 }
 procedure TZGenericStatementAnalyser.FillFieldRefs(
-  const SelectSchema: IZSelectSchema; SelectTokens: TZTokenList);
+  const SelectSchema: IZSelectSchema; SelectTokens: TStrings);
 var
   TokenIndex: Integer;
   Catalog: string;
@@ -486,26 +506,34 @@ var
     //Check to right side to avoid wrong alias detection
     while SelectTokens.Count > TokenIndex +i do
     begin
-      CurrentValue := SelectTokens.AsString(TokenIndex+i);
-      CurrentType  := SelectTokens[TokenIndex+i]^.TokenType;
-      if CurrentType in [ttWhiteSpace, ttSymbol] then begin
-        if (CurrentValue = ',') then begin
+      CurrentValue := SelectTokens[TokenIndex+i];
+      CurrentType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+        SelectTokens.Objects[TokenIndex+i]{$IFDEF FPC}){$ENDIF});
+      if CurrentType in [ttWhiteSpace, ttSymbol] then
+      begin
+        if (CurrentValue = ',') then
+        begin
           Result := True;
           Break;
         end;
-      end else
+      end
+      else
         break;
       Inc(i);
     end;
 
-    if Result then begin
+    if Result then
+    begin
       i := 1;
       while Tokenindex - i > 0 do
-        if SelectTokens[TokenIndex-i]^.TokenType = ttWhiteSpace
-        then Inc(i)
-        else Break;
+        if TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+            SelectTokens.Objects[TokenIndex-i]{$IFDEF FPC}){$ENDIF}) = ttWhiteSpace then
+          Inc(i)
+        else
+          Break;
       Result := Result and (TokenIndex - I > 0) and
-          not ( SelectTokens[TokenIndex-i]^.TokenType = ttWord );
+          not ( TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+        SelectTokens.Objects[TokenIndex-i]{$IFDEF FPC}){$ENDIF}) = ttWord );
     end;
   end;
 
@@ -516,16 +544,17 @@ begin
   ClearElements;
   while TokenIndex < SelectTokens.Count do
   begin
-    CurrentValue := SelectTokens.AsString(TokenIndex);
+    CurrentValue := SelectTokens[TokenIndex];
     CurrentUpper := AnsiUpperCase(CurrentValue);
-    CurrentType := SelectTokens[TokenIndex]^.TokenType;
+    CurrentType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+      SelectTokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF});
 
     { Switches to alias part. }
     CurrentUpperIs_AS := (CurrentUpper = 'AS');
     if (CurrentType = ttWhitespace) or CurrentUpperIs_AS then
       ReadField := ReadField and (Field = '') and not CurrentUpperIs_AS
     { Reads field. }
-    else if ReadField and ((CurrentType in [ttWord, ttQuotedIdentifier]) or
+    else if ReadField and ((CurrentType = ttWord) or (CurrentType = ttQuotedIdentifier) or
       (CurrentValue = '*')) then
     begin
       Catalog := Schema;
@@ -555,12 +584,15 @@ begin
       HadWhitespace := False;
       while (TokenIndex < SelectTokens.Count) and (CurrentValue <> ',') do
       begin
-        CurrentValue := SelectTokens.AsString(TokenIndex);
-        if CurrentValue = '(' then begin
+        CurrentValue := SelectTokens[TokenIndex];
+        if CurrentValue = '(' then
+        begin
           SkipBracketTokens(SelectTokens, TokenIndex);
           LastWasBracketSection := True;
-        end else begin
-          CurrentType := SelectTokens[TokenIndex]^.TokenType;
+        end
+        else begin
+          CurrentType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+            SelectTokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF});
           if HadWhitespace and (CurrentType in [ttWord, ttQuotedIdentifier]) then
             if not LastWasBracketSection and CheckNextTokenForCommaAndWhiteSpaces then
               Break
@@ -597,8 +629,9 @@ end;
   @param SelectSchema a select schema object.
   @param FromTokens a list of tokens in from section.
 }
+{$HINTS OFF}
 procedure TZGenericStatementAnalyser.FillTableRefs(
-  const SelectSchema: IZSelectSchema; FromTokens: TZTokenList);
+  const SelectSchema: IZSelectSchema; FromTokens: TStrings);
 var
   TokenIndex: Integer;
   Catalog: string;
@@ -625,68 +658,83 @@ begin
   ClearElements;
   while TokenIndex < FromTokens.Count do
   begin
-    CurrentValue := FromTokens.AsString(TokenIndex);
+    CurrentValue := FromTokens[TokenIndex];
     CurrentUpper := AnsiUpperCase(CurrentValue);
-    CurrentType := FromTokens[TokenIndex]^.TokenType;
+    CurrentType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+      FromTokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF});
 
     { Processes from join keywords. }
-    if FromJoins.IndexOf(CurrentUpper) >= 0 then begin
+    if FromJoins.IndexOf(CurrentUpper) >= 0 then
+    begin
       if Table <> '' then
         SelectSchema.AddTable(TZTableRef.Create(Catalog, Schema, Table, Alias));
       ClearElements;
       SkipOptionTokens(FromTokens, TokenIndex, FromJoins);
       Continue;
+    end
     { Skips from clause keywords. }
-    end else if FromClauses.IndexOf(CurrentUpper) >= 0 then
+    else if FromClauses.IndexOf(CurrentUpper) >= 0 then
     begin
       Inc(TokenIndex);
-      CurrentValue := FromTokens.AsString(TokenIndex);
+      CurrentValue := FromTokens[TokenIndex];
       CurrentUpper := AnsiUpperCase(CurrentValue);
       while (TokenIndex < FromTokens.Count)
         and (FromJoins.IndexOf(CurrentUpper) < 0) and (CurrentUpper <> ',') do
       begin
-        if CurrentUpper = '('
-        then SkipBracketTokens(FromTokens, TokenIndex)
+        if CurrentUpper = '(' then
+            SkipBracketTokens(FromTokens, TokenIndex)
         else Inc(TokenIndex);
-        if TokenIndex < FromTokens.Count then begin
-          CurrentValue := FromTokens.AsString(TokenIndex);
-          CurrentUpper := AnsiUpperCase(CurrentValue);
-          CurrentType := FromTokens[TokenIndex]^.TokenType;
-        end;
+        if TokenIndex < FromTokens.Count then
+          begin
+            CurrentValue := FromTokens[TokenIndex];
+            CurrentUpper := AnsiUpperCase(CurrentValue);
+            CurrentType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+              FromTokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF});
+          end;
       end;
       // We must jump 1 tokens back now when we stopped on a Join clause.
       // Otherwise the next table is skipped
-      if FromJoins.IndexOf(CurrentUpper) >= 0 then begin
-        Dec(TokenIndex);
-        CurrentValue := FromTokens.AsString(TokenIndex);
-        CurrentUpper := AnsiUpperCase(CurrentValue);
-      end;
+      if FromJoins.IndexOf(CurrentUpper) >= 0 then
+        begin
+          Dec(TokenIndex);
+          CurrentValue := FromTokens[TokenIndex];
+          CurrentUpper := AnsiUpperCase(CurrentValue);
+        end;
     end
     { Switches to alias part. }
     else if (CurrentType = ttWhitespace) or (CurrentUpper = 'AS') then
-      ReadTable := ReadTable and (Table = '') and (CurrentUpper <> 'AS')
+    begin
+      ReadTable := ReadTable and (Table = '') and (CurrentUpper <> 'AS');
+    end
     { Reads table. }
-    else if ReadTable and (CurrentType in [ttWord, ttQuotedIdentifier]) then begin
+    else if ReadTable and ((CurrentType = ttWord) or (CurrentType = ttQuotedIdentifier)) then
+    begin
       {Catalog := Schema;
       Schema := Table;}
       Table := CurrentValue;
+    end
     { Skips a '.' in table part. }
-    end else if ReadTable and (CurrentValue = '.') then begin
+    else if ReadTable and (CurrentValue = '.') then
+    begin
       Catalog := Schema;
       Schema := Table;
       Table := '';
+    end
     { Reads alias. }
-    end else if not ReadTable and (CurrentType = ttWord) then
+    else if not ReadTable and (CurrentType = ttWord) then
+    begin
       Alias := CurrentValue;
+    end;
     { Ends field reading. }
-    if CurrentValue = ',' then begin
+    if CurrentValue = ',' then
+    begin
       if Table <> '' then
         SelectSchema.AddTable(TZTableRef.Create(Catalog, Schema, Table, Alias));
       ClearElements;
     end;
     { Skips till the next field. }
-    if CurrentValue = '('
-    then SkipBracketTokens(FromTokens, TokenIndex)
+    if CurrentValue = '(' then
+      SkipBracketTokens(FromTokens, TokenIndex)
     else Inc(TokenIndex);
   end;
 
@@ -694,17 +742,17 @@ begin
   if Table <> '' then
     SelectSchema.AddTable(TZTableRef.Create(Catalog, Schema, Table, Alias));
 end;
-
+{$HINTS ON}
 {**
   Extracts a select schema from the specified parsed select statement.
   @param Sections a list of sections.
   @return a select statement schema.
 }
 function TZGenericStatementAnalyser.DefineSelectSchemaFromSections(
-  {$IFDEF AUTOREFCOUNT}const{$ENDIF}Sections: TObjectList): IZSelectSchema;
+  Sections: TObjectList): IZSelectSchema;
 var
-  SelectTokens: TZTokenList;
-  FromTokens: TZTokenList;
+  SelectTokens: TStrings;
+  FromTokens: TStrings;
 begin
   Result := nil;
   { Checks for the correct select statement. }
@@ -735,7 +783,7 @@ end;
 function TZGenericStatementAnalyser.DefineSelectSchemaFromQuery(
   const Tokenizer: IZTokenizer; const SQL: string): IZSelectSchema;
 var
-  Tokens: TZTokenList;
+  Tokens: TStrings;
   Sections: TObjectList;
 begin
   Tokens := TokenizeQuery(Tokenizer, SQL, True);

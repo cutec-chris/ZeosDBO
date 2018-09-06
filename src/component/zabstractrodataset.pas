@@ -67,7 +67,7 @@ uses
   Variants, Types, SysUtils, Classes, FMTBcd, {$IFNDEF FPC}SqlTimSt,{$ENDIF}
   {$IFDEF MSEgui}mclasses, mdb{$ELSE}DB{$ENDIF},
   ZSysUtils, ZAbstractConnection, ZDbcIntfs, ZSqlStrings,
-  Contnrs, ZDbcCache, ZDbcCachedResultSet, ZCompatibility, ZExpression, ZClasses
+  Contnrs, ZDbcCache, ZDbcCachedResultSet, ZCompatibility, ZExpression
   {$IFDEF WITH_GENERIC_TLISTTFIELD}, Generics.Collections{$ENDIF};
 
 type
@@ -77,12 +77,6 @@ type
   EUpdateError = class(EDatabaseError)
   end;
   {$ENDIF}
-
-  {$IF NOT DECLARED(TRecordBuffer)}
-  TRecordBuffer = PChar;
-  {$IFEND}
-
-  TGetCalcFieldsParamType = {$IFDEF WITH_GETCALCFIELDS_TRECBUF}TRecBuf{$ELSE}TRecordBuffer{$ENDIF};
 
   TSortType = (stAscending, stDescending, stIgnored);   {bangfauzan addition}
 
@@ -102,16 +96,13 @@ type
   private
     FErrorCode: Integer;
     FStatusCode: String;
-    FSpecificData: TZExceptionSpecificData;
     procedure SetStatusCode(const Value: String);
    public
     constructor Create(const Msg: string);
     constructor CreateFromException(E: EZSQLThrowable);
-    destructor Destroy; override;
 
     property ErrorCode: Integer read FErrorCode write FErrorCode;
     property StatusCode: String read FStatusCode write SetStatusCode;
-    property SpecificData: TZExceptionSpecificData read FSpecificData;
   end;
 
   {** Dataset Linker class. }
@@ -178,7 +169,11 @@ type
   TDataSetField = class;
   {$ENDIF WITH_TDATASETFIELD}
   {** Abstract dataset component optimized for read/only access. }
-  TZAbstractRODataset = class({$IF DECLARED(TWideDataSet)}TWideDataSet{$ELSE}TDataSet{$IFEND})
+  {$IFDEF WITH_WIDEDATASET}
+  TZAbstractRODataset = class(TWideDataSet)
+  {$ELSE}
+  TZAbstractRODataset = class(TDataSet)
+  {$ENDIF}
   private
 {$IFNDEF WITH_FUNIDIRECTIONAL}
     FUniDirectional: Boolean;
@@ -215,7 +210,6 @@ type
     FResultSet: IZResultSet;
 
     FRefreshInProgress: Boolean;
-    {FFieldDefsInitialized: boolean;}  // commented out because this causes SF#286
 
     FDataLink: TDataLink;
     FMasterLink: TMasterDataLink;
@@ -299,7 +293,7 @@ type
     function GetIndexFieldNames : String; {bangfauzan addition}
     procedure SetIndexFieldNames(const Value : String); {bangfauzan addition}
     procedure SetOptions(Value: TZDatasetOptions);
-    procedure SetSortedFields(const Value: string); {bangfauzan modification}
+    procedure SetSortedFields({const} Value: string); {bangfauzan modification}
     procedure SetProperties(const Value: TStrings);
 
     function GetSortType : TSortType; {bangfauzan addition}
@@ -327,8 +321,8 @@ type
     function FilterRow(RowNo: NativeInt): Boolean;
     function GotoRow(RowNo: NativeInt): Boolean; // added by tohenk
     procedure RereadRows;
-    procedure SetStatementParams(const Statement: IZPreparedStatement;
-      const ParamNames: TStringDynArray; Params: TParams;
+    procedure SetStatementParams(Statement: IZPreparedStatement;
+      ParamNames: TStringDynArray; Params: TParams;
       DataLink: TDataLink); virtual;
     procedure MasterChanged(Sender: TObject);
     procedure MasterDisabled(Sender: TObject);
@@ -338,7 +332,7 @@ type
   protected { Internal protected properties. }
     function CreateStatement(const SQL: string; Properties: TStrings):
       IZPreparedStatement; virtual;
-    function CreateResultSet(const SQL: string; MaxRows: Integer):
+    function CreateResultSet(const {%H-}SQL: string; MaxRows: Integer):
       IZResultSet; virtual;
     {$IFDEF HAVE_UNKNOWN_CIRCULAR_REFERENCE_ISSUES} //EH: there is something weired with cirtcular references + FPC and implementation uses! So i added this virtual function to get a IsUpdatable state
     function GetUpdatable: Boolean; virtual;
@@ -403,7 +397,7 @@ type
     property NestedDataSetClass: TDataSetClass read FNestedDataSetClass write FNestedDataSetClass;
     {$ENDIF}
   protected { Abstracts methods }
-    procedure InternalAddRecord(Buffer: Pointer; Append: Boolean); override;
+    procedure InternalAddRecord({%H-}Buffer: Pointer; {%H-}Append: Boolean); override;
     procedure InternalDelete; override;
     procedure InternalPost; override;
     {$IFNDEF FPC}
@@ -413,29 +407,48 @@ type
     {$ENDIF}
     procedure DefineProperties(Filer: TFiler); override;
 
+{$IFDEF WITH_TRECORDBUFFER}
     function GetRecord(Buffer: TRecordBuffer; GetMode: TGetMode; DoCheck: Boolean):
       TGetResult; override;
+{$ELSE}
+    function GetRecord(Buffer: PChar; GetMode: TGetMode; DoCheck: Boolean):
+      TGetResult; override;
+{$ENDIF}
     function GetRecordSize: Word; override;
-    function GetActiveBuffer(out RowBuffer: PZRowBuffer): Boolean;
+    function GetActiveBuffer(var RowBuffer: PZRowBuffer): Boolean;
+{$IFDEF WITH_TRECORDBUFFER}
     function AllocRecordBuffer: TRecordBuffer; override;
     procedure FreeRecordBuffer(var Buffer: TRecordBuffer); override;
-    function CreateNestedDataSet(DataSetField: TDataSetField): TDataSet; {$IFDEF WITH_FTDATASETSUPPORT}override;{$ENDIF}
-    procedure CloseBlob(Field: TField); override;
+{$ELSE}
+    function AllocRecordBuffer: PChar; override;
+    procedure FreeRecordBuffer(var Buffer: PChar); override;
+{$ENDIF}
+    function CreateNestedDataSet({%H-}DataSetField: TDataSetField): TDataSet; {$IFDEF WITH_FTDATASETSUPPORT}override;{$ENDIF}
+    procedure CloseBlob({%H-}Field: TField); override;
 
-    procedure CheckFieldCompatibility(Field: TField; AFieldDef: TFieldDef); {$IFDEF WITH_CHECKFIELDCOMPATIBILITY} override;{$ENDIF}
+    procedure CheckFieldCompatibility(Field: TField; FieldDef: TFieldDef); {$IFDEF WITH_CHECKFIELDCOMPATIBILITY} override;{$ENDIF}
     procedure CreateFields; override;
 
+{$IFDEF WITH_TRECORDBUFFER}
     procedure ClearCalcFields(Buffer: TRecordBuffer); override;
+{$ELSE}
+    procedure ClearCalcFields(Buffer: PChar); override;
+{$ENDIF}
 
     procedure InternalInitFieldDefs; override;
     procedure InternalOpen; override;
     procedure InternalClose; override;
     procedure InternalFirst; override;
     procedure InternalLast; override;
+{$IFDEF WITH_TRECORDBUFFER}
     procedure InternalInitRecord(Buffer: TRecordBuffer); override;
+{$ELSE}
+    procedure InternalInitRecord(Buffer: PChar); override;
+{$ENDIF}
     procedure InternalGotoBookmark(Bookmark: Pointer); override;
     procedure InternalRefresh; override;
     procedure InternalHandleException; override;
+{$IFDEF WITH_TRECORDBUFFER}
     procedure InternalSetToRecord(Buffer: TRecordBuffer); override;
     procedure GetBookmarkData(Buffer: TRecordBuffer;
       Data:{$IFDEF WITH_BOOKMARKDATA_TBOOKMARK}TBookMark{$ELSE}Pointer{$ENDIF}); override;
@@ -443,6 +456,13 @@ type
     procedure SetBookmarkFlag(Buffer: TRecordBuffer; Value: TBookmarkFlag); override;
     procedure SetBookmarkData(Buffer: TRecordBuffer;
       Data: {$IFDEF WITH_BOOKMARKDATA_TBOOKMARK}TBookMark{$ELSE}Pointer{$ENDIF}); override;
+{$ELSE}
+    procedure InternalSetToRecord(Buffer: PChar); override;
+    procedure GetBookmarkData(Buffer: PChar; Data: Pointer); override;
+    function GetBookmarkFlag(Buffer: PChar): TBookmarkFlag; override;
+    procedure SetBookmarkFlag(Buffer: PChar; Value: TBookmarkFlag); override;
+    procedure SetBookmarkData(Buffer: PChar; Data: Pointer); override;
+{$ENDIF}
 {$IFNDEF WITH_FIELDDEFLIST}
   protected {indirect creation of internal objects}
     function GetFieldDefListClass: TFieldDefListClass; virtual;
@@ -456,12 +476,6 @@ type
     function InternalLocate(const KeyFields: string; const KeyValues: Variant;
       Options: TLocateOptions): LongInt;
     function FindRecord(Restart, GoForward: Boolean): Boolean; override;
-    {$IFDEF FPC} // FPC has these methods virtual plainly returning False while on Delphi they use FindRecord
-    function FindFirst: Boolean; override;
-    function FindLast: Boolean; override;
-    function FindNext: Boolean; override;
-    function FindPrior: Boolean; override;
-    {$ENDIF}
     procedure SetFiltered(Value: Boolean); override;
     procedure SetFilterText(const Value: string); override;
     {$IFNDEF WITH_OBJECTVIEW}
@@ -506,7 +520,7 @@ type
     function PSGetQuoteChar: string; override;
     function PSGetKeyFields: string; override;
     function PSExecuteStatement(const ASQL: string; AParams: TParams;
-      ResultSet: Pointer = nil): Integer; override;
+      {%H-}ResultSet: Pointer = nil): Integer; override;
     procedure PSSetCommandText(const CommandText: string); override;
     {$ENDIF}
     function PSGetUpdateException(E: Exception;
@@ -514,8 +528,8 @@ type
     function PSIsSQLBased: Boolean; override;
     function PSIsSQLSupported: Boolean; override;
     procedure PSReset; override;
-    function PSUpdateRecord(UpdateKind: TUpdateKind;
-      Delta: TDataSet): Boolean; override;
+    function PSUpdateRecord({%H-}UpdateKind: TUpdateKind;
+      {%H-}Delta: TDataSet): Boolean; override;
     procedure PSExecute; override;
     function PSGetParams: TParams; override;
     procedure PSSetParams(AParams: TParams); override;
@@ -657,10 +671,10 @@ type
     function GetAsString: string; override;
     function GetAsWideString: {$IFDEF UNICODE}UnicodeString{$ELSE}WideString{$ENDIF}; {$IFDEF WITH_FTWIDESTRING}override;{$ENDIF}
     function GetAsAnsiString: AnsiString; {$IFDEF WITH_ASANSISTRING}override;{$ENDIF}
-    function GetAsUTF8String: UTF8String; {$IFDEF WITH_ASUTF8STRING}override;{$ENDIF}
+    function GetAsUTF8String: UTF8String;
     function GetAsRawByteString: RawByteString;
     { record/array types }
-    function GetAsGuid: TGUID; {$IFDEF WITH_VIRTUAL_TFIELD_GETASGUID} override; {$ENDIF}
+    function GetAsGUID: TGUID;
     function GetAsBytes: TBytes; {$IFDEF TFIELD_HAS_ASBYTES}override;{$ENDIF}
     function GetAsVariant: Variant; override;
     //function GetCanModify: Boolean; virtual;
@@ -695,7 +709,7 @@ type
     procedure SetAsString(const Value: string); override;
     procedure SetAsWideString(const Value: {$IFDEF UNICODE}UnicodeString{$ELSE}WideString{$ENDIF}); {$IFDEF WITH_FTWIDESTRING}override;{$ENDIF}
     procedure SetAsAnsiString(const Value: AnsiString); {$IFDEF WITH_ASANSISTRING}override;{$ENDIF}
-    procedure SetAsUTF8String(const Value: UTF8String); {$IFDEF WITH_ASUTF8STRING}override;{$ENDIF}
+    procedure SetAsUTF8String(const Value: UTF8String);
     procedure SetAsRawByteString(const Value: RawByteString);
 
     procedure SetAsBytes(const Value: TBytes); {$IFDEF TFIELD_HAS_ASBYTES}override;{$ENDIF}
@@ -831,7 +845,7 @@ type
     procedure SetAsString(const Value: string); override;
     procedure SetAsWideString(const Value: {$IFDEF UNICODE}UnicodeString{$ELSE}WideString{$ENDIF}); {$IFDEF WITH_FTWIDESTRING}override;{$ENDIF}
     procedure SetAsAnsiString(const Value: AnsiString); {$IFDEF WITH_ASANSISTRING}override;{$ENDIF}
-    procedure SetAsUTF8String(const Value: UTF8String); {$IFDEF WITH_ASUTF8STRING}override;{$ENDIF}
+    procedure SetAsUTF8String(const Value: UTF8String);
     procedure SetAsRawByteString(const Value: RawByteString);
   protected
     procedure RangeError(Value, Min, Max: Extended);
@@ -992,8 +1006,8 @@ type
     constructor Create(AOwner: TComponent); override;
     property Value: UInt64 read GetAsUInt64 write SetAsUInt64;
   published
-    property MaxValue: UInt64 read FMaxValue write SetMaxValue {$IF NOT(defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR))}default 0{$IFEND};
-    property MinValue: UInt64 read FMinValue write SetMinValue {$IF NOT(defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR))}default 0{$IFEND};
+    property MaxValue: UInt64 read FMaxValue write SetMaxValue default 0;
+    property MinValue: UInt64 read FMinValue write SetMinValue default 0;
   end;
 
 (*{ TAutoIncField }
@@ -1019,9 +1033,6 @@ type
     procedure SetCurrency(Value: Boolean);
   protected
     procedure SetPrecision(Value: Integer); virtual;
-    procedure InternalGetText(Value: Extended; out Text: string; DisplayText: Boolean);
-  public
-    constructor Create(AOwner: TComponent); override;
   published
     { Lowercase to avoid name clash with C++ Currency type }
     property currency: Boolean read FCurrency write SetCurrency default False;
@@ -1341,8 +1352,8 @@ type
     FPrecision: Integer;
     procedure BcdRangeError(Value: Variant; Max, Min: string);
     procedure SetCurrency(Value: Boolean);
-    procedure SetMaxValue(const Value: string);
-    procedure SetMinValue(const Value: string);
+    procedure SetMaxValue(Value: string);
+    procedure SetMinValue(Value: string);
     procedure SetPrecision(Value: Integer);
     procedure UpdateCheckRange;
   protected
@@ -1481,7 +1492,7 @@ type
     constructor Create(AOwner: TComponent); override;
   end;   *)
 
-{ TObjectField }
+{ TZObjectField }
 
   {$IFNDEF WITH_TOBJECTFIELD}
   TObjectField = class(TZField)
@@ -1494,7 +1505,7 @@ type
     procedure ReadUnNamed(Reader: TReader);
     procedure WriteUnNamed(Writer: TWriter);
   protected
-    class procedure CheckTypeSize(Value: Integer); override;
+    class procedure CheckTypeSize({%H-}Value: Integer); override;
     {$IFNDEF WITH_VIRTUAL_TFIELD_BIND}
     procedure Bind(Binding: Boolean); virtual;
     {$ENDIF}
@@ -1677,8 +1688,8 @@ type
     procedure SetActive(Value: Boolean);
     function GetHandle: Pointer; virtual;
     procedure SetGroupingLevel(Value: Integer);
-    procedure SetIndexName(const Value: string);
-    procedure SetExpression(const Value: string);
+    procedure SetIndexName(Value: string);
+    procedure SetExpression(Value: string);
     procedure SetPrecision(Value: Integer);
     procedure SetCurrency(Value: Boolean);
   protected
@@ -1780,7 +1791,7 @@ var
 implementation
 
 uses ZFastCode, Math, ZVariant, ZMessages, ZDatasetUtils, ZStreamBlob, ZSelectSchema,
-  ZGenericSqlToken, ZTokenizer, ZGenericSqlAnalyser, ZEncoding, ZDbcProperties
+  ZGenericSqlToken, ZTokenizer, ZGenericSqlAnalyser, ZEncoding
   {$IFNDEF HAVE_UNKNOWN_CIRCULAR_REFERENCE_ISSUES}, ZAbstractDataset{$ENDIF} //see comment of Updatable property
   {$IFDEF WITH_DBCONSTS}, DBConsts {$ELSE}, DBConst{$ENDIF}
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF}
@@ -1806,19 +1817,11 @@ begin
   inherited Create(E.Message);
   ErrorCode := E.ErrorCode;
   Statuscode:= E.StatusCode;
-  if E.SpecificData <> nil then
-    FSpecificData := E.SpecificData.Clone;
 end;
 
 procedure EZDatabaseError.SetStatusCode(const Value: String);
 begin
   FStatusCode := value;
-end;
-
-destructor EZDatabaseError.Destroy;
-begin
-  FreeAndNil(FSpecificData);
-  inherited;
 end;
 
 { TZDataLink }
@@ -1890,13 +1893,11 @@ begin
   Result := FUpdated;
 end;
 
-{$IFDEF FPC} {$PUSH} {$WARN 5024 off : Parameter "$1" not used} {$ENDIF} // parameter not used intentionally
 procedure TFlatList.ListChanging(Sender: TObject);
 begin
   if Locked then
     DatabaseError(SReadOnlyProperty, DataSet);
 end;
-{$IFDEF FPC} {$POP} {$ENDIF}
 
 procedure TFlatList.Update;
 begin
@@ -2102,7 +2103,7 @@ var
   P: PAnsiChar;
   L: NativeUInt;
 begin
-  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result, L);
+  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result{%H-}, L);
   if Result then
     Buffer^ := #0
   else
@@ -2119,7 +2120,7 @@ var
   P: PWideChar;
   L: NativeUInt;
 begin
-  P := RowAccessor.GetPWideChar(ColumnIndex, Result, L);
+  P := RowAccessor.GetPWideChar(ColumnIndex, Result{%H-}, L);
   if Result then
     Buffer^ := #0
   else //instead of StrPLCopy
@@ -2132,7 +2133,7 @@ var
   P: PAnsiChar;
   L: NativeUInt;
 begin
-  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result, L);
+  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result{%H-}, L);
   if Result then
     PWord(Buffer)^ := Ord(#0)
   else //instead of WStrLCopy
@@ -2146,7 +2147,7 @@ var
   P: PAnsiChar;
   L: NativeUInt;
 begin
-  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result, L);
+  P := RowAccessor.GetPAnsiChar(ColumnIndex, Result{%H-}, L);
   if Result then
     PWord(Buffer)^ := Ord(#0)
   else //instead of WStrLCopy
@@ -2159,7 +2160,7 @@ var
   P: PWideChar;
   L: NativeUInt;
 begin
-  P := RowAccessor.GetPWideChar(ColumnIndex, Result, L);
+  P := RowAccessor.GetPWideChar(ColumnIndex, Result{%H-}, L);
   if not Result then
   begin //instead of StrPLCopy
     L := {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}ZCompatibility.{$ENDIF}Min(L, Max(dsMaxStringSize shr 1, FieldSize)); //left for String truncation if option FUndefinedVarcharAsStringLength is <> 0
@@ -2306,7 +2307,7 @@ procedure TZAbstractRODataset.SetParamCheck(Value: Boolean);
 begin
   if Value <> FSQL.ParamCheck then begin
     FSQL.ParamCheck := Value;
-    UpdateSQLStrings(FSQL);
+    UpdateSQLStrings(Self);
   end;
 end;
 
@@ -2327,7 +2328,7 @@ procedure TZAbstractRODataset.SetParamChar(Value: Char);
 begin
   if Value <> FSQL.ParamChar then begin
     FSQL.ParamChar := Value;
-    UpdateSQLStrings(FSQL);
+    UpdateSQLStrings(Self);
   end;
 end;
 
@@ -2414,8 +2415,8 @@ begin
   FParams.Clear;
 
   try
-    for I := 0 to TZSQLStrings(Sender).ParamCount - 1 do
-      FParams.CreateParam(ftUnknown, TZSQLStrings(Sender).ParamNames[I], ptUnknown);
+    for I := 0 to FSQL.ParamCount - 1 do
+      FParams.CreateParam(ftUnknown, FSQL.ParamNames[I], ptUnknown);
     FParams.AssignValues(OldParams);
   finally
     OldParams.Free;
@@ -2564,7 +2565,7 @@ begin
       begin
         Inc(FFetchCount);
         if FilterRow(ResultSet.GetRow) then
-          CurrentRows.Add(Pointer(ResultSet.GetRow))
+          CurrentRows.Add({%H-}Pointer(ResultSet.GetRow))
         else
           Continue;
       end;
@@ -2632,7 +2633,7 @@ begin
     CurrentRows := TZSortedList.Create;
 
     SavedState := SetTempState(dsNewValue);
-    CurrentRows.Add(Pointer(RowNo));
+    CurrentRows.Add({%H-}Pointer(RowNo));
     CurrentRow := 1;
 
     try
@@ -2679,7 +2680,7 @@ var
   Index: Integer;
 begin
   Result := False;
-  Index := CurrentRows.IndexOf(Pointer(RowNo));
+  Index := CurrentRows.IndexOf({%H-}Pointer(RowNo));
   if Index >= 0 then
   begin
     if Index < CurrentRow then
@@ -2702,16 +2703,16 @@ begin
     UpdateCursorPos; //see http://sourceforge.net/p/zeoslib/tickets/89/
     if (CurrentRow > 0) and (CurrentRow <= CurrentRows.Count) and
        (CurrentRows.Count > 0) then
-      RowNo := NativeInt(CurrentRows[CurrentRow - 1])
+      RowNo := {%H-}NativeInt(CurrentRows[CurrentRow - 1])
     else
       RowNo := -1;
     CurrentRows.Clear;
 
     for I := 1 to FetchCount do
       if FilterRow(I) then
-        CurrentRows.Add(Pointer(I));
+        CurrentRows.Add({%H-}Pointer(I));
 
-    CurrentRow := CurrentRows.IndexOf(Pointer(RowNo)) + 1;
+    CurrentRow := CurrentRows.IndexOf({%H-}Pointer(RowNo)) + 1;
     CurrentRow := Min(Max(1, CurrentRow), CurrentRows.Count);
 
     if FSortedFields <> '' then
@@ -2728,8 +2729,8 @@ end;
   @param Params a collection of SQL parameters.
   @param DataLink a datalink to get parameters.
 }
-procedure TZAbstractRODataset.SetStatementParams(const Statement: IZPreparedStatement;
-  const ParamNames: TStringDynArray; Params: TParams; DataLink: TDataLink);
+procedure TZAbstractRODataset.SetStatementParams(Statement: IZPreparedStatement;
+  ParamNames: TStringDynArray; Params: TParams; DataLink: TDataLink);
 var
   I: Integer;
   TempParam, Param: TParam;
@@ -2741,16 +2742,17 @@ begin
   else
     Dataset := nil;
 
-  if (not ParamCheck) and (not Assigned(ParamNames)) and (FParams.Count > 0) then begin
-    for I := 0 to Params.Count -1 do begin
-      Param := Params[i];
-      if not Assigned(Param) or (Param.ParamType in [ptOutput, ptResult]) then
-        Continue;
-      SetStatementParam(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF}, Statement, Param);
-    end;
-  end else begin
-    TempParam := TParam.Create(nil);
-    try
+  TempParam := TParam.Create(nil);
+
+  try
+    if (not ParamCheck) and (not Assigned(ParamNames)) and (FParams.Count > 0) then begin
+      for I := 0 to Params.Count -1 do begin
+        Param := Params[i];
+        if not Assigned(Param) or (Param.ParamType in [ptOutput, ptResult]) then
+          Continue;
+        SetStatementParam(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF}, Statement, Param);
+      end;
+    end else begin
       for I := Low(ParamNames) to High(ParamNames) do
       begin
         if Assigned(Dataset) then
@@ -2772,9 +2774,9 @@ begin
 
         SetStatementParam(I{$IFNDEF GENERIC_INDEX}+1{$ENDIF}, Statement, Param);
       end;
-    finally
-      TempParam.Free;
     end;
+  finally
+    TempParam.Free;
   end;
 end;
 
@@ -2785,8 +2787,15 @@ end;
   @param DoCheck flag to perform checking.
   @return a location result.
 }
+
+{$IFDEF WITH_TRECORDBUFFER}
 function TZAbstractRODataset.GetRecord(Buffer: TRecordBuffer; GetMode: TGetMode;
   DoCheck: Boolean): TGetResult;
+{$ELSE}
+
+function TZAbstractRODataset.GetRecord(Buffer: PChar; GetMode: TGetMode;
+  DoCheck: Boolean): TGetResult;
+{$ENDIF}
 var
   RowNo: NativeInt;
 begin
@@ -2835,14 +2844,14 @@ begin
 
   if Result = grOK then
   begin
-    RowNo := NativeInt(CurrentRows[CurrentRow - 1]);
+    RowNo := {%H-}NativeInt(CurrentRows[CurrentRow - 1]);
     if ResultSet.GetRow <> RowNo then
       ResultSet.MoveAbsolute(RowNo);
     RowAccessor.RowBuffer := PZRowBuffer(Buffer);
     RowAccessor.RowBuffer^.Index := RowNo;
     FetchFromResultSet(ResultSet, FieldsLookupTable, Fields, RowAccessor);
     FRowAccessor.RowBuffer^.BookmarkFlag := Ord(bfCurrent);
-    GetCalcFields(TGetCalcFieldsParamType(Buffer));
+    GetCalcFields({$IFDEF WITH_GETCALCFIELDS_TRECBUF}NativeInt{$ENDIF}(Buffer));
   end;
 
   if (Result = grError) and DoCheck then
@@ -2854,7 +2863,7 @@ end;
   @param RowBuffer a reference to the result row buffer.
   @return <code>True</code> if the buffer was defined.
 }
-function TZAbstractRODataset.GetActiveBuffer(out RowBuffer: PZRowBuffer):
+function TZAbstractRODataset.GetActiveBuffer(var RowBuffer: PZRowBuffer):
   Boolean;
 var
   RowNo: NativeInt;
@@ -2871,7 +2880,7 @@ begin
       RowBuffer := PZRowBuffer(CalcBuffer);
     dsOldValue, dsNewValue, dsCurValue:
       begin
-        RowNo := NativeInt(CurrentRows[CurrentRow - 1]);
+        RowNo := {%H-}NativeInt(CurrentRows[CurrentRow - 1]);
         if RowNo <> ResultSet.GetRow then
           CheckBiDirectional;
 
@@ -2926,7 +2935,7 @@ var
   P: Pointer;
   RowBuffer: PZRowBuffer;
 begin
-  if GetActiveBuffer(RowBuffer) then
+  if GetActiveBuffer(RowBuffer{%H-}) then
   begin
     if FUseZFields and (Field is TZField) then
       ColumnIndex := (Field as TZField).FFieldIndex
@@ -2940,7 +2949,7 @@ begin
         ftDate, ftTime, ftDateTime:
           if Field.DataType <> ftTime then
             DateTimeToNative(Field.DataType,
-              RowAccessor.GetTimestamp(ColumnIndex, Result), Buffer)
+              RowAccessor.GetTimestamp(ColumnIndex, Result{%H-}), Buffer)
           else
             DateTimeToNative(Field.DataType,
               RowAccessor.GetTime(ColumnIndex, Result), Buffer);
@@ -2971,7 +2980,7 @@ begin
             if Result then
               PAnsiChar(Buffer)^ := #0
             else
-              GUIDToBuffer(P, PAnsiChar(Buffer), True, True);
+              GUIDToBuffer(P, PAnsiChar(Buffer), True);
           end;
         {$ENDIF}
         {$IFDEF WITH_FTDATASETSUPPORT}
@@ -3051,7 +3060,7 @@ begin
   if not (State in dsWriteModes) then
     DatabaseError(SNotEditing, Self);
 
-  if GetActiveBuffer(RowBuffer) then
+  if GetActiveBuffer(RowBuffer{%H-}) then
   begin
     ColumnIndex := DefineFieldIndex(FieldsLookupTable, Field);
     RowAccessor.RowBuffer := RowBuffer;
@@ -3102,7 +3111,7 @@ begin
       RowAccessor.SetNull(ColumnIndex);
 
     if not (State in [dsCalcFields, dsFilter, dsNewValue]) then
-      DataEvent(deFieldChange, NativeInt(Field));
+      DataEvent(deFieldChange, ULong(Field));
   end
   else
     raise EZDatabaseError.Create(SRowDataIsNotAvailable);
@@ -3145,24 +3154,37 @@ end;
   Allocates a buffer for new record.
   @return an allocated record buffer.
 }
+
+{$IFDEF WITH_TRECORDBUFFER}
 function TZAbstractRODataset.AllocRecordBuffer: TRecordBuffer;
+begin
+   Result := TRecordBuffer(RowAccessor.Alloc);
+end;
+{$ELSE}
+function TZAbstractRODataset.AllocRecordBuffer: PChar;
 begin
   {Dev notes:
    This will be called for OldRowBuffer, NewRowBuffer and for count of visible rows
    so NO memory wasting happens here!
   }
-  RowAccessor.Alloc;
-  Result := TRecordBuffer(RowAccessor.RowBuffer);
+  Result := PChar(RowAccessor.Alloc);
 end;
+{$ENDIF}
 
 {**
   Frees a previously allocated record buffer.
   @param Buffer a previously allocated buffer.
 }
+
+{$IFDEF WITH_TRECORDBUFFER}
+
 procedure TZAbstractRODataset.FreeRecordBuffer(var Buffer: TRecordBuffer);
+{$ELSE}
+
+procedure TZAbstractRODataset.FreeRecordBuffer(var Buffer: PChar);
+{$ENDIF}
 begin
   RowAccessor.DisposeBuffer(PZRowBuffer(Buffer));
-  Buffer := nil;
 end;
 
 {**
@@ -3307,7 +3329,6 @@ begin
       end;
       UnPrepare;
     end;
-    {FFieldDefsInitialized := True;}  // commented out because this caises SF#286
   end;
 end;
 
@@ -3327,9 +3348,18 @@ begin
     if Assigned(Properties) then
       Temp.AddStrings(Properties);
     { Define TDataset specific parameters. }
-    Temp.Values[DSProps_Defaults] := BoolStrs[doCalcDefaults in FOptions];
-    Temp.Values[DSProps_PreferPrepared] := BoolStrs[doPreferPrepared in FOptions];
-    Temp.Values[DSProps_CachedLobs] := BoolStrs[doCachedLobs in FOptions];
+    if doCalcDefaults in FOptions then
+      Temp.Values['defaults'] := 'true'
+    else
+      Temp.Values['defaults'] := 'false';
+    if doPreferPrepared in FOptions then
+      Temp.Values['preferprepared'] := 'true'
+    else
+      Temp.Values['preferprepared'] := 'false';
+    if doCachedLobs in FOptions then
+      Temp.Values['cachedlob'] := 'true'
+    else
+      Temp.Values['cachedlob'] := 'false';
 
     Result := FConnection.DbcConnection.PrepareStatementWithParams(SQL, Temp);
   finally
@@ -3411,14 +3441,10 @@ begin
       end;
 
     { Initializes field and index defs. }
-    if (not FRefreshInProgress) {and (not FFieldDefsInitialized)} then  // commented out because this causes SF#286
+    if not FRefreshInProgress then
       InternalInitFieldDefs;
 
-    {$IFDEF WITH_LIFECYCLES}
-    if ((FieldOptions.AutoCreateMode <> acExclusive) or not (lcPersistent in Fields.LifeCycles)) and not FRefreshInProgress then
-    {$ELSE}
     if DefaultFields and not FRefreshInProgress then
-    {$ENDIF}
     begin
       CreateFields;
       if not (doNoAlignDisplayWidth in FOptions) then
@@ -3483,11 +3509,19 @@ begin
 
   if not FRefreshInProgress then begin
     if (FOldRowBuffer <> nil) then
+{$IFDEF WITH_TRECORDBUFFER}
       FreeRecordBuffer(TRecordBuffer(FOldRowBuffer));   // TRecordBuffer can be both pbyte and pchar in FPC. Don't assume.
+{$ELSE}
+      FreeRecordBuffer(PChar(FOldRowBuffer));
+{$ENDIF}
     FOldRowBuffer := nil;
 
     if (FNewRowBuffer <> nil) and not FRefreshInProgress then
+{$IFDEF WITH_TRECORDBUFFER}
       FreeRecordBuffer(TRecordBuffer(FNewRowBuffer));
+{$ELSE}
+      FreeRecordBuffer(PChar(FNewRowBuffer));
+{$ENDIF}
     FNewRowBuffer := nil;
 
     if RowAccessor <> nil then
@@ -3495,11 +3529,7 @@ begin
     RowAccessor := nil;
 
     { Destroy default fields }
-    {$IFDEF WITH_LIFECYCLES}
-    if ((FieldOptions.AutoCreateMode <> acExclusive) or not (lcPersistent in Fields.LifeCycles)) then
-    {$ELSE}
     if DefaultFields then
-    {$ENDIF}
       DestroyFields;
 
     FieldsLookupTable := nil;
@@ -3714,7 +3744,6 @@ end;
   Processes change events from the master dataset.
   @param Sender an event sender object.
 }
-{$IFDEF FPC} {$PUSH} {$WARN 5024 off : Parameter "$1" not used} {$ENDIF} // TNotifyEvent - parameter not used intentionally
 procedure TZAbstractRODataset.MasterChanged(Sender: TObject);
 begin
   CheckBrowseMode;
@@ -3731,11 +3760,13 @@ procedure TZAbstractRODataset.MasterDisabled(Sender: TObject);
 begin
   RereadRows;
 end;
-{$IFDEF FPC} {$POP} {$ENDIF}
 
 {**
   Initializes new record with master fields.
 }
+{$IFDEF WITH_DEPRECATED_EXTRACTFIELDNAME}
+  {$WARNINGS OFF}
+{$ENDIF}
 procedure TZAbstractRODataset.DoOnNewRecord;
 var
   I: Integer;
@@ -3786,6 +3817,9 @@ begin
   end;
   inherited DoOnNewRecord;
 end;
+{$IFDEF WITH_DEPRECATED_EXTRACTFIELDNAME}
+  {$WARNINGS ON}
+{$ENDIF}
 
 {**
   Gets a list of index field names.
@@ -3828,21 +3862,20 @@ end;
   Sets a new sorted fields.
   @param Value a new sorted fields.
 }
-procedure TZAbstractRODataset.SetSortedFields(const Value: string); {bangfauzan modification}
-var aValue: string;
+procedure TZAbstractRODataset.SetSortedFields({const} Value: string); {bangfauzan modification}
 begin
-  aValue:=Trim(Value); {bangfauzan addition}
-  if (FSortedFields <> aValue) or (FIndexFieldNames <> aValue)then {bangfauzan modification}
+  Value:=Trim(Value); {bangfauzan addition}
+  if (FSortedFields <> Value) or (FIndexFieldNames <> Value)then {bangfauzan modification}
   begin
-    FIndexFieldNames:=aValue;
+    FIndexFieldNames:=Value;
     FSortType := GetSortType; {bangfauzan addition}
     {removing ASC or DESC behind space}
     if (FSortType <> stIgnored) then
     begin {pawelsel modification}
-      aValue:=StringReplace(aValue,' Desc','',[rfReplaceAll,rfIgnoreCase]);
-      aValue:=StringReplace(aValue,' Asc','',[rfReplaceAll,rfIgnoreCase]);
+       Value:=StringReplace(Value,' Desc','',[rfReplaceAll,rfIgnoreCase]);
+       Value:=StringReplace(Value,' Asc','',[rfReplaceAll,rfIgnoreCase]);
     end;
-    FSortedFields := aValue;
+    FSortedFields := Value;
     if Active then
       if not ({$IFDEF FPC}Updatable{$ELSE}Self is TZAbstractDataSet{$ENDIF}) then
         InternalSort //enables clearsort which prevents rereading data
@@ -3905,11 +3938,11 @@ end;
 }
 procedure TZAbstractRODataset.InternalUnPrepare;
 begin
-  if Statement <> nil then begin
-    Statement.Close;
-    Statement := nil;
-  end;
-  {FFieldDefsInitialized := False;} // commented out because this causes SF#286
+  if Statement <> nil then
+    begin
+      Statement.Close;
+      Statement := nil;
+    end;
 end;
 
 {**
@@ -3927,7 +3960,11 @@ end;
   @param Buffer the specified row buffer.
 }
 
+{$IFDEF WITH_TRECORDBUFFER}
 procedure TZAbstractRODataset.InternalSetToRecord(Buffer: TRecordBuffer);
+{$ELSE}
+procedure TZAbstractRODataset.InternalSetToRecord(Buffer: PChar);
+{$ENDIF}
 begin
   GotoRow(PZRowBuffer(Buffer)^.Index);
 end;
@@ -3940,11 +3977,9 @@ end;
 {$ENDIF}
 
 {$IFNDEF WITH_VIRTUAL_DEFCHANGED}
-{$IFDEF FPC} {$PUSH} {$WARN 5024 off : Parameter "$1" not used} {$ENDIF} // base class - parameter not used intentionally
 procedure TZAbstractRODataset.DefChanged(Sender: TObject);
 begin
 end;
-{$IFDEF FPC} {$POP} {$ENDIF}
 {$ENDIF}
 
 {$IFNDEF WITH_DATASETFIELD}
@@ -4031,7 +4066,14 @@ end;
   @param Buffer a pointer to the record buffer.
   @return a bookmark flag from the specified record.
 }
+
+{$IFDEF WITH_TRECORDBUFFER}
+
 function TZAbstractRODataset.GetBookmarkFlag(Buffer: TRecordBuffer): TBookmarkFlag;
+{$ELSE}
+
+function TZAbstractRODataset.GetBookmarkFlag(Buffer: PChar): TBookmarkFlag;
+{$ENDIF}
 begin
   Result := TBookmarkFlag(PZRowBuffer(Buffer)^.BookmarkFlag);
 end;
@@ -4042,8 +4084,13 @@ end;
   @param Value a new bookmark flag to the specified record.
 }
 
+{$IFDEF WITH_TRECORDBUFFER}
 procedure TZAbstractRODataset.SetBookmarkFlag(Buffer: TRecordBuffer;
   Value: TBookmarkFlag);
+{$ELSE}
+procedure TZAbstractRODataset.SetBookmarkFlag(Buffer: PChar;
+  Value: TBookmarkFlag);
+{$ENDIF}
 begin
   PZRowBuffer(Buffer)^.BookmarkFlag := Ord(Value);
 end;
@@ -4055,7 +4102,7 @@ end;
 }
 
 procedure TZAbstractRODataset.GetBookmarkData(
-  Buffer: TRecordBuffer;
+  Buffer: {$IFDEF WITH_TRECORDBUFFER}TRecordBuffer{$ELSE}PChar{$ENDIF};
   Data: {$IFDEF WITH_BOOKMARKDATA_TBOOKMARK}TBookMark{$ELSE}Pointer{$ENDIF});
 begin
   PInteger(Data)^ := PZRowBuffer(Buffer)^.Index;
@@ -4069,7 +4116,7 @@ end;
 
 
 procedure TZAbstractRODataset.SetBookmarkData(
-  Buffer: TRecordBuffer;
+  Buffer: {$IFDEF WITH_TRECORDBUFFER}TRecordBuffer{$ELSE}PChar{$ENDIF};
   Data: {$IFDEF WITH_BOOKMARKDATA_TBOOKMARK}TBookMark{$ELSE}Pointer{$ENDIF});
 begin
   PZRowBuffer(Buffer)^.Index := PInteger(Data)^;
@@ -4119,7 +4166,11 @@ end;
   @param Buffer a record buffer for initialization.
 }
 
+{$IFDEF WITH_TRECORDBUFFER}
 procedure TZAbstractRODataset.InternalInitRecord(Buffer: TRecordBuffer);
+{$ELSE}
+procedure TZAbstractRODataset.InternalInitRecord(Buffer: PChar);
+{$ENDIF}
 begin
   RowAccessor.ClearBuffer(PZRowBuffer(Buffer));
 end;
@@ -4147,8 +4198,8 @@ begin
       if ResultSet.GetRow <> RowNo then
         ResultSet.MoveAbsolute(RowNo);
 
-      if Properties.Values[DSProps_KeyFields] <> '' then
-        KeyFields := Properties.Values[DSProps_KeyFields]
+      if Properties.Values['KeyFields'] <> '' then
+        KeyFields := Properties.Values['KeyFields']
       else
         KeyFields := DefineKeyFields(Fields, Connection.DbcConnection.GetMetadata.GetIdentifierConvertor);
       FieldRefs := DefineFields(Self, KeyFields, OnlyDataFields, Connection.DbcConnection.GetDriver.GetTokenizer);
@@ -4264,28 +4315,6 @@ begin
     DoAfterScroll;
   end;
 end;
-
-{$IFDEF FPC}
-function TZAbstractRODataset.FindFirst: Boolean;
-begin
-  Result := FindRecord(True, True);
-end;
-
-function TZAbstractRODataset.FindLast: Boolean;
-begin
-  Result := FindRecord(True, False);
-end;
-
-function TZAbstractRODataset.FindNext: Boolean;
-begin
-  Result := FindRecord(False, True);
-end;
-
-function TZAbstractRODataset.FindPrior: Boolean;
-begin
-  Result := FindRecord(False, False);
-end;
-{$ENDIF}
 
 {**
   Sets a filtering control flag.
@@ -4428,7 +4457,11 @@ begin
         RowAccessor.RowBuffer := SearchRowBuffer;
         RowAccessor.RowBuffer^.Index := RowNo;
         FetchFromResultSet(ResultSet, FieldsLookupTable, Fields, RowAccessor);
-        GetCalcFields(TGetCalcFieldsParamType(SearchRowBuffer));
+{$IFDEF WITH_TRECORDBUFFER}
+        GetCalcFields({$IFDEF WITH_GETCALCFIELDS_TRECBUF}NativeInt{$ELSE}TRecordBuffer{$ENDIF}(SearchRowBuffer));
+{$ELSE}
+        GetCalcFields(PChar(SearchRowBuffer));
+{$ENDIF}
         RetrieveDataFieldsFromRowAccessor(
           FieldRefs, FieldIndices, RowAccessor, RowValues);
 
@@ -4443,7 +4476,11 @@ begin
       end;
     finally
       if SearchRowBuffer <> nil then
+{$IFDEF WITH_TRECORDBUFFER}
         FreeRecordBuffer(TRecordBuffer(SearchRowBuffer));
+{$ELSE}
+        FreeRecordBuffer(PChar(SearchRowBuffer));
+{$ENDIF}
     end;
   end
   else
@@ -4547,11 +4584,19 @@ begin
     RowAccessor.RowBuffer := SearchRowBuffer;
     RowAccessor.RowBuffer^.Index := RowNo;
     FetchFromResultSet(ResultSet, FieldsLookupTable, Fields, RowAccessor);
-    GetCalcFields(TGetCalcFieldsParamType(SearchRowBuffer));
+{$IFDEF WITH_TRECORDBUFFER}
+    GetCalcFields({$IFDEF WITH_GETCALCFIELDS_TRECBUF}NativeInt{$ELSE}TRecordBuffer{$ENDIF}(SearchRowBuffer));
+{$ELSE}
+    GetCalcFields(PChar(SearchRowBuffer));
+{$ENDIF}
     RetrieveDataFieldsFromRowAccessor(
       FieldRefs, FieldIndices, RowAccessor, ResultValues);
   finally
+{$IFDEF WITH_TRECORDBUFFER}
     FreeRecordBuffer(TRecordBuffer(SearchRowBuffer));
+{$ELSE}
+    FreeRecordBuffer(PChar(SearchRowBuffer));
+{$ENDIF}
   end;
 
   if Length(FieldIndices) = 1 then
@@ -4593,7 +4638,7 @@ begin
   if (Src <> nil) then
   begin
     Result := ZFastCode.StrLen(Src);
-  {$IFDEF MSWINDOWS}
+  {$IFNDEF UNIX}
     if doOemTranslate in FOptions then
     begin
       if ToOem then
@@ -4651,7 +4696,7 @@ begin
 
   Result := nil;
   if (Field.DataType in [ftBlob, ftMemo, ftGraphic, ftFmtMemo {$IFDEF WITH_WIDEMEMO},ftWideMemo{$ENDIF}])
-    and GetActiveBuffer(RowBuffer) then
+    and GetActiveBuffer(RowBuffer{%H-}) then
   begin
     ColumnIndex := DefineFieldIndex(FieldsLookupTable, Field);
     RowAccessor.RowBuffer := RowBuffer;
@@ -4714,7 +4759,6 @@ begin
     if not ResultSet.IsBeforeFirst then
       ResultSet.BeforeFirst; //need this. All from dataset buffered resultsets are EOR
     FUseCurrentStatment := True; //hint for InternalOpen
-    {FFieldDefsInitialized := False;}  // commented out because it causes SF#286
     OpenCursor{$IFDEF FPC}(False){$ENDIF}; //Calls InternalOpen in his sequence so InternalOpen must be prepared
     OpenCursorComplete; //set DataSet to dsActive
     FUseCurrentStatment := False; //reset hint for InternalOpen
@@ -4739,7 +4783,7 @@ begin
 
     if (CurrentRow <= CurrentRows.Count) and (CurrentRows.Count > 0)
       and (CurrentRow > 0) then
-      RowNo := NativeInt(CurrentRows[CurrentRow - 1])
+      RowNo := {%H-}NativeInt(CurrentRows[CurrentRow - 1])
     else
       RowNo := -1;
 
@@ -4767,8 +4811,8 @@ begin
         { Sorts using generic highlevel approach. }
         try
           { Allocates buffers for sorting. }
-          FSortRowBuffer1 := RowAccessor.AllocBuffer;
-          FSortRowBuffer2 := RowAccessor.AllocBuffer;
+          RowAccessor.AllocBuffer(FSortRowBuffer1);
+          RowAccessor.AllocBuffer(FSortRowBuffer2);
           { Converts field objects into field indices. }
           SetLength(FSortedFieldIndices, Length(FSortedFieldRefs));
           for I := 0 to High(FSortedFieldRefs) do
@@ -4788,7 +4832,7 @@ begin
       end;
     end;
 
-    CurrentRow := CurrentRows.IndexOf(Pointer(RowNo)) + 1;
+    CurrentRow := CurrentRows.IndexOf({%H-}Pointer(RowNo)) + 1;
     CurrentRow := Min(Max(0, CurrentRow), CurrentRows.Count);
     if not (State in [dsInactive]) then
        Resync([]);
@@ -4805,7 +4849,7 @@ end;
 function TZAbstractRODataset.ClearSort(Item1, Item2: Pointer): Integer;
 begin
   //no real pointer addresses here, just a Integer represented as Pointer! -> overflow save!
-  Result := NativeInt(Item1) - NativeInt(Item2);
+  Result := {%H-}NativeInt(Item1) - {%H-}NativeInt(Item2);
 end;
 
 {**
@@ -4828,16 +4872,24 @@ begin
   RowAccessor.RowBuffer^.Index := RowNo;
   FetchFromResultSet(ResultSet, FieldsLookupTable, Fields, RowAccessor);
   FRowAccessor.RowBuffer^.BookmarkFlag := Ord(bfCurrent);
-  GetCalcFields(TGetCalcFieldsParamType(FSortRowBuffer1));
+{$IFDEF WITH_TRECORDBUFFER}
+  GetCalcFields({$IFDEF WITH_GETCALCFIELDS_TRECBUF}NativeInt{$ELSE}TRecordBuffer{$ENDIF}(FSortRowBuffer1));
+{$ELSE}
+  GetCalcFields(PChar(FSortRowBuffer1));
+{$ENDIF}
 
   { Gets the second row. }
-  RowNo := NativeInt(Item2);
+  RowNo := {%H-}NativeInt(Item2);
   ResultSet.MoveAbsolute(RowNo);
   RowAccessor.RowBuffer := FSortRowBuffer2;
   RowAccessor.RowBuffer^.Index := RowNo;
   FetchFromResultSet(ResultSet, FieldsLookupTable, Fields, RowAccessor);
   FRowAccessor.RowBuffer^.BookmarkFlag := Ord(bfCurrent);
-  GetCalcFields(TGetCalcFieldsParamType(FSortRowBuffer2));
+{$IFDEF WITH_TRECORDBUFFER}
+  GetCalcFields({$IFDEF WITH_GETCALCFIELDS_TRECBUF}NativeInt{$ELSE}TRecordBuffer{$ENDIF}(FSortRowBuffer2));
+{$ELSE}
+  GetCalcFields(PChar(FSortRowBuffer2));
+{$ENDIF}
 
   { Compare both records. }
   Result := RowAccessor.CompareBuffers(FSortRowBuffer1, FSortRowBuffer2,
@@ -5080,10 +5132,12 @@ end;
 }
 // Silvio Clecio
 {$IFDEF WITH_IPROVIDERWIDE}
+{$WARNINGS OFF}
 function TZAbstractRODataset.PSGetKeyFieldsW: WideString;
 begin
   Result := inherited PSGetKeyFieldsW;
 end;
+{$WARNINGS ON}
 {$ELSE}
 function TZAbstractRODataset.PSGetKeyFields: string;
 begin
@@ -5130,8 +5184,7 @@ end;
 
 {$ENDIF}
 
-// NB: FPC has TField.FieldDef property
-procedure TZAbstractRODataset.CheckFieldCompatibility(Field: TField; AFieldDef: TFieldDef);
+procedure TZAbstractRODataset.CheckFieldCompatibility(Field: TField;FieldDef: TFieldDef);
 const
   {EH: hint all commented types are the fields the RowAccessor can't handle -> avoid stack killing moves in Get/SetFieldData()
   this Error trapping is made for User-added fields like calulateds ....}
@@ -5161,20 +5214,18 @@ const
 begin
   with Field do
   begin
-    if (BaseFieldTypes[DataType] <> BaseFieldTypes[AFieldDef.DataType]) then
+    if (BaseFieldTypes[DataType] <> BaseFieldTypes[FieldDef.DataType]) then
       DatabaseErrorFmt(SFieldTypeMismatch, [DisplayName,
-        FieldTypeNames[DataType], FieldTypeNames[AFieldDef.DataType]], Self);
-    if (DataType in CheckTypeSizes) and (Size <> AFieldDef.Size) then
+        FieldTypeNames[DataType], FieldTypeNames[FieldDef.DataType]], Self);
+    if (DataType in CheckTypeSizes) and (Size <> FieldDef.Size) then
         DatabaseErrorFmt(SFieldSizeMismatch, [DisplayName, Size,
-          AFieldDef.Size], Self);
+          FieldDef.Size], Self);
   end;
 end;
 
-{$IFDEF WITH_IPROVIDERSUPPORT_GUID}
-type
-  IProviderSupportActual = {$IF DECLARED(IProviderSupportNG)} IProviderSupportNG {$ELSE} IProviderSupport {$IFEND};
+{$IFDEF WITH_DEPRECATED_EXTRACTFIELDNAME}
+  {$WARNINGS OFF}
 {$ENDIF}
-
 procedure TZAbstractRODataset.CreateFields;
 var
   I: Integer;
@@ -5184,17 +5235,28 @@ var
     Pos, j: Integer;
     KeyFields, FieldName: string;
     {$IFDEF WITH_IPROVIDERSUPPORT_GUID}
-    PS: IProviderSupportActual;
-    {$ENDIF}
+      {$IFDEF WITH_IPROVIDERSUPPORT_NG}
+      PS : IProviderSupportNG;
+      {$ELSE}
+      PS : IProviderSupport;
+      {$ENDIF}
+    {$ENDIF WITH_IPROVIDERSUPPORT_GUID}
   begin
     {$IFDEF WITH_IPROVIDERSUPPORT_GUID}
-    if Supports(self, IProviderSupportActual, PS) then
-      KeyFields := PS.PSGetKeyFields
-    else
-      KeyFields := IProviderSupportActual(Self).PSGetKeyFields;
-    {$ELSE}
-    KeyFields := self.PSGetKeyFields;
-    {$ENDIF}
+      {$IFDEF WITH_IPROVIDERSUPPORT_NG}
+      if Supports(self, IProviderSupportNG, PS) then
+        KeyFields := PS.PSGetKeyFields
+      else
+        KeyFields := IProviderSupportNG(self).PSGetKeyFields;
+      {$ELSE}
+      if Supports(self, IProviderSupport, PS) then
+        KeyFields := PS.PSGetKeyFields
+      else
+        KeyFields := IProviderSupport(self).PSGetKeyFields;
+      {$ENDIF}
+    {$ELSE WITH_IPROVIDERSUPPORT_GUID}
+      KeyFields := self.PSGetKeyFields;
+    {$ENDIF WITH_IPROVIDERSUPPORT_GUID}
     Pos := 1;
     while Pos <= Length(KeyFields) do
     begin
@@ -5230,12 +5292,23 @@ begin
   end
   else inherited CreateFields;
 end;
+{$IFDEF WITH_DEPRECATED_EXTRACTFIELDNAME}
+  {$WARNINGS ON}
+{$ENDIF}
+
 
 {**
   Reset the calculated (includes fkLookup) fields
   @param Buffer
 }
+
+{$IFDEF WITH_TRECORDBUFFER}
+
 procedure TZAbstractRODataset.ClearCalcFields(Buffer: TRecordBuffer);
+{$ELSE}
+
+procedure TZAbstractRODataset.ClearCalcFields(Buffer: PChar);
+{$ENDIF}
 var
   Index: Integer;
 begin
@@ -5445,14 +5518,14 @@ function TZField.GetValidationBuffer: {$IFDEF WITH_TVALUEBUFFER}TValueBuffer{$EL
 var IsNull: Boolean;
 begin
   {Active RowBuffer is already set!}
-  Result := {$IFDEF WITH_TVALUEBUFFER}TValueBuffer{$ENDIF}((DataSet as TZAbstractRODataset).RowAccessor.GetColumnData(FFieldIndex, IsNull));
+  Result := {$IFDEF WITH_TVALUEBUFFER}TValueBuffer{$ENDIF}((DataSet as TZAbstractRODataset).RowAccessor.GetColumnData(FFieldIndex, IsNull{%H-}));
 end;
 
 function TZField.GetAsBoolean: Boolean;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBoolean(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBoolean(FFieldIndex, IsNull{%H-})
   else
     Result := False;
 end;
@@ -5461,7 +5534,7 @@ function TZField.GetAsDateTime: TDateTime;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5470,7 +5543,7 @@ function TZField.GetAsDate: TDateTime;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5479,7 +5552,7 @@ function TZField.GetAsTime: TDateTime;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetTimestamp(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5488,7 +5561,7 @@ function TZField.GetAsCurrency: Currency;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBigDecimal(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBigDecimal(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5497,7 +5570,7 @@ function TZField.GetAsBCD: TBcd;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    TryStrToBcd((DataSet as TZAbstractRODataset).FRowAccessor.GetString(FFieldIndex, IsNull), Result)
+    TryStrToBcd((DataSet as TZAbstractRODataset).FRowAccessor.GetString(FFieldIndex, IsNull{%H-}), Result{%H-})
   else
     Result := NullBcd;
 end;
@@ -5507,7 +5580,7 @@ function TZField.GetAsSingle: Single;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetFloat(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetFloat(FFieldIndex, IsNull{%H-})
   else
     Result := 0.0;
 end;
@@ -5516,7 +5589,7 @@ function TZField.GetAsFloat: Double;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetDouble(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetDouble(FFieldIndex, IsNull{%H-})
   else
     Result := 0.0;
 end;
@@ -5525,7 +5598,7 @@ function TZField.GetAsExtended: Extended;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBigDecimal(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBigDecimal(FFieldIndex, IsNull{%H-})
   else
     Result := 0.0;
 end;
@@ -5535,7 +5608,7 @@ function TZField.GetAsShortInt: ShortInt;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetShort(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetShort(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5544,7 +5617,7 @@ function TZField.GetAsSmallInt: SmallInt;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetSmall(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetSmall(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5553,7 +5626,7 @@ function TZField.GetAsInteger: Longint;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetInt(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetInt(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5562,7 +5635,7 @@ function TZField.GetAsLargeInt: Largeint;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetLong(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetLong(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5572,7 +5645,7 @@ function TZField.GetAsByte: Byte;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetByte(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetByte(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5581,7 +5654,7 @@ function TZField.GetAsWord: Word;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetInt(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetInt(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
@@ -5590,28 +5663,26 @@ function TZField.GetAsLongWord: LongWord;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUInt(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUInt(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
 
-{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 function TZField.GetAsUInt64: UInt64;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetLong(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetLong(FFieldIndex, IsNull{%H-})
   else
     Result := 0;
 end;
-{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
 
 { string types }
 function TZField.GetAsString: string;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetString(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetString(FFieldIndex, IsNull{%H-})
   else
     Result := '';
 end;
@@ -5620,7 +5691,7 @@ function TZField.GetAsWideString: {$IFDEF UNICODE}UnicodeString{$ELSE}WideString
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUnicodeString(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUnicodeString(FFieldIndex, IsNull{%H-})
   else
     Result := '';
 end;
@@ -5629,7 +5700,7 @@ function TZField.GetAsAnsiString: AnsiString;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetAnsiString(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetAnsiString(FFieldIndex, IsNull{%H-})
   else
     Result := '';
 end;
@@ -5638,7 +5709,7 @@ function TZField.GetAsUTF8String: UTF8String;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUTF8String(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetUTF8String(FFieldIndex, IsNull{%H-})
   else
     Result := '';
 end;
@@ -5647,19 +5718,19 @@ function TZField.GetAsRawByteString: RawByteString;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetRawByteString(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetRawByteString(FFieldIndex, IsNull{%H-})
   else
     Result := '';
 end;
 
-function TZField.GetAsGuid: TGUID;
+function TZField.GetAsGUID: TGUID;
 var IsNull: Boolean;
   Bytes: TBytes;
 begin
   FillChar(Result, SizeOf(Result), #0);
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
   begin
-    Bytes := (DataSet as TZAbstractRODataset).FRowAccessor.GetBytes(FFieldIndex, IsNull);
+    Bytes := (DataSet as TZAbstractRODataset).FRowAccessor.GetBytes(FFieldIndex, IsNull{%H-});
     if not IsNull then
       Result := PGUID(Bytes)^;
   end;
@@ -5669,7 +5740,7 @@ function TZField.GetAsBytes: TBytes;
 var IsNull: Boolean;
 begin
   if GetActiveRowBuffer then //need this call to get active RowBuffer.
-    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBytes(FFieldIndex, IsNull)
+    Result := (DataSet as TZAbstractRODataset).FRowAccessor.GetBytes(FFieldIndex, IsNull{%H-})
   else
     Result := nil;
 end;
@@ -5769,7 +5840,7 @@ begin
     if Self.FValidating then
 
     (DataSet as TZAbstractRODataset).FRowAccessor.SetString(FFieldIndex, BcdToStr(Value));
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5778,7 +5849,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetBoolean(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5788,7 +5859,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetTimestamp(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 //procedure TZField.SetAsSQLTimeStamp(const Value: TSQLTimeStamp); virtual;
@@ -5800,7 +5871,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetBigDecimal(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5809,7 +5880,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetFloat(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5818,7 +5889,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetDouble(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5827,7 +5898,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetBigDecimal(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5837,7 +5908,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetShort(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5846,7 +5917,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetSmall(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5855,7 +5926,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetInt(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5864,7 +5935,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetLong(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5874,7 +5945,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetByte(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5884,7 +5955,7 @@ begin
   begin
     //reminder !!
     (DataSet as TZAbstractRODataset).FRowAccessor.SetWord(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5894,7 +5965,7 @@ begin
   begin
     //reminder !!
     (DataSet as TZAbstractRODataset).FRowAccessor.SetUInt(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5904,7 +5975,7 @@ begin
   begin
     //reminder !!
     (DataSet as TZAbstractRODataset).FRowAccessor.SetULong(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5914,7 +5985,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetString(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5923,7 +5994,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetUnicodeString(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5932,7 +6003,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetAnsiString(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5941,7 +6012,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetUTF8String(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5950,7 +6021,7 @@ begin
   if IsFieldEditable then
   begin
     (DataSet as TZAbstractRODataset).FRowAccessor.SetRawByteString(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -5960,7 +6031,7 @@ begin
   begin
     //reminder !!
     (DataSet as TZAbstractRODataset).FRowAccessor.SetBytes(FFieldIndex, Value);
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -6001,7 +6072,7 @@ begin
       //varArray:
       //varByRef:
     end;
-    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, NativeInt(Self));
+    (DataSet as TZAbstractRODataset).DataEvent(deFieldChange, ULong(Self));
   end;
 end;
 
@@ -6038,7 +6109,6 @@ begin
   end;
 end;
 
-{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R-}{$IFEND}
 function TZNumericField.ConvertUnSigned(const Value; const ValueType: TZSQLType): UInt64;
 begin
   case ValueType of
@@ -6061,7 +6131,6 @@ begin
       raise EZSQLException.Create(Format(SConvertionIsNotPossible, [FFieldIndex, '','']));
   end;
 end;
-{$IF defined (RangeCheckEnabled) and defined(WITH_UINT64_C1118_ERROR)}{$R+}{$IFEND}
 
 function TZNumericField.ConvertExtended(const Value; const ValueType: TZSQLType): Extended;
 begin
@@ -6291,9 +6360,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsByte(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZByteField.SetMaxValue(Value: Byte);
@@ -6331,9 +6405,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsShortInt(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZShortIntField.SetMaxValue(Value: ShortInt);
@@ -6371,9 +6450,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsWord(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZWordField.SetMaxValue(Value: Word);
@@ -6411,9 +6495,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsSmallInt(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZSmallIntField.SetMaxValue(Value: SmallInt);
@@ -6451,9 +6540,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsInteger(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZIntegerField.SetMaxValue(Value: Longint);
@@ -6491,9 +6585,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsLongWord(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZLongWordField.SetMaxValue(Value: LongWord);
@@ -6531,9 +6630,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsLargeInt(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZInt64Field.SetMaxValue(Value: Int64);
@@ -6571,9 +6675,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsUInt64(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZUInt64Field.SetMaxValue(Value: UInt64);
@@ -6633,12 +6742,6 @@ end;
 
 { TZFloatField }
 
-constructor TZFloatField.Create(AOwner: TComponent);
-begin
-  inherited Create(AOwner);
-  ValidChars := [{$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}DecimalSeparator, '+', '-', '0'..'9', 'E', 'e'];
-end;
-
 procedure TZFloatField.SetCurrency(Value: Boolean);
 begin
   if FCurrency <> Value then
@@ -6655,38 +6758,6 @@ begin
     FPrecision := Value;
     PropertyChanged(False);
   end;
-end;
-
-procedure TZFloatField.InternalGetText(Value: Extended; out Text: string; DisplayText: Boolean);
-  { Note: FloatToStrF / FormatFloat that are called below use Extended type anyway.
-    So there's no sense in personal GetText copies for every float type. }
-var
-  Format: TFloatFormat;
-  FmtStr: string;
-  Digits: Integer;
-begin
-  if DisplayText or (FEditFormat = '')
-    then FmtStr := FDisplayFormat
-    else FmtStr := FEditFormat;
-
-  if FmtStr = '' then
-  begin
-    if FCurrency then
-    begin
-      if DisplayText
-        then Format := ffCurrency
-        else Format := ffFixed;
-      Digits := {$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}CurrencyDecimals;
-    end
-    else
-    begin
-      Format := ffGeneral;
-      Digits := 0;
-    end;
-    Text := FloatToStrF(Value, Format, FPrecision, Digits {$IFDEF WITH_FORMATSETTINGS}, FormatSettings{$ENDIF});
-  end
-  else
-    Text := FormatFloat(FmtStr, Value {$IFDEF WITH_FORMATSETTINGS}, FormatSettings{$ENDIF});
 end;
 
 { TZSingleField }
@@ -6719,9 +6790,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsSingle(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 function TZSingleField.GetDataSize: Integer;
@@ -6730,11 +6806,35 @@ begin
 end;
 
 procedure TZSingleField.GetText(var Text: string; DisplayText: Boolean);
+var
+  Format: TFloatFormat;
+  FmtStr: string;
+  Digits: Integer;
+  F: Single;
 begin
   if IsNull then
     Text := ''
   else
-    InternalGetText(GetAsSingle, Text, DisplayText);
+  begin
+    F := GetAsSingle;
+    if DisplayText or (FEditFormat = '') then
+      FmtStr := FDisplayFormat else
+      FmtStr := FEditFormat;
+    if FmtStr = '' then
+    begin
+      if FCurrency then
+      begin
+        if DisplayText then Format := ffCurrency else Format := ffFixed;
+        Digits := {$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}CurrencyDecimals;
+      end
+      else begin
+        Format := ffGeneral;
+        Digits := 0;
+      end;
+      Text := FloatToStrF(F, Format, FPrecision, Digits);
+    end else
+      Text := FormatFloat(FmtStr, F);
+  end;
 end;
 
 constructor TZSingleField.Create(AOwner: TComponent);
@@ -6742,6 +6842,7 @@ begin
   inherited Create(AOwner);
   SetDataType({$IFDEF WITH_FTSINGLE}ftSingle{$ELSE}ftFloat{$ENDIF});
   FPrecision := 7;
+  ValidChars := [{$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}DecimalSeparator, '+', '-', '0'..'9', 'E', 'e'];
 end;
 
 { TZDoubleField }
@@ -6774,9 +6875,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsFloat(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 function TZDoubleField.GetDataSize: Integer;
@@ -6785,11 +6891,35 @@ begin
 end;
 
 procedure TZDoubleField.GetText(var Text: string; DisplayText: Boolean);
+var
+  Format: TFloatFormat;
+  FmtStr: string;
+  Digits: Integer;
+  F: Double;
 begin
   if IsNull then
     Text := ''
   else
-    InternalGetText(GetAsFloat, Text, DisplayText);
+  begin
+    F := GetAsFloat;
+    if DisplayText or (FEditFormat = '') then
+      FmtStr := FDisplayFormat else
+      FmtStr := FEditFormat;
+    if FmtStr = '' then
+    begin
+      if FCurrency then
+      begin
+        if DisplayText then Format := ffCurrency else Format := ffFixed;
+        Digits := {$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}CurrencyDecimals;
+      end
+      else begin
+        Format := ffGeneral;
+        Digits := 0;
+      end;
+      Text := FloatToStrF(F, Format, FPrecision, Digits);
+    end else
+      Text := FormatFloat(FmtStr, F);
+  end;
 end;
 
 constructor TZDoubleField.Create(AOwner: TComponent);
@@ -6797,6 +6927,7 @@ begin
   inherited Create(AOwner);
   SetDataType(ftFloat);
   FPrecision := 15;
+  ValidChars := [{$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}DecimalSeparator, '+', '-', '0'..'9', 'E', 'e'];
 end;
 
 { TZCurrencyField }
@@ -6822,9 +6953,14 @@ begin
   if (ConvertedValue < FMinValue) or (ConvertedValue > FMaxValue) then
     RangeError(ConvertedValue, FMinValue, FMaxValue);
   //Let the IDE do the RangeCheck !
-  {$R+}
+  {$IFOPT R-}
+    {$DEFINE DisableRangeChecking}
+    {$R+}
+  {$ENDIF}
   inherited SetAsCurrency(ConvertedValue);
-  {$IFNDEF RangeCheckEnabled} {$R-} {$ENDIF}
+  {$IFDEF DisableRangeChecking}
+    {$R-}
+  {$ENDIF}
 end;
 
 procedure TZCurrencyField.SetPrecision(Value: Integer);
@@ -6840,11 +6976,35 @@ begin
 end;
 
 procedure TZCurrencyField.GetText(var Text: string; DisplayText: Boolean);
+var
+  Format: TFloatFormat;
+  FmtStr: string;
+  Digits: Integer;
+  F: System.Currency;
 begin
   if IsNull then
     Text := ''
   else
-    InternalGetText(GetAsCurrency, Text, DisplayText);
+  begin
+    F := GetAsCurrency;
+    if DisplayText or (FEditFormat = '') then
+      FmtStr := FDisplayFormat else
+      FmtStr := FEditFormat;
+    if FmtStr = '' then
+    begin
+      if FCurrency then
+      begin
+        if DisplayText then Format := ffCurrency else Format := ffFixed;
+        Digits := {$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}CurrencyDecimals;
+      end
+      else begin
+        Format := ffGeneral;
+        Digits := 0;
+      end;
+      Text := FloatToStrF(F, Format, FPrecision, Digits);
+    end else
+      Text := FormatFloat(FmtStr, F);
+  end;
 end;
 
 constructor TZCurrencyField.Create(AOwner: TComponent);
@@ -6852,6 +7012,7 @@ begin
   inherited Create(AOwner);
   SetDataType(ftCurrency);
   FPrecision := 15;
+  ValidChars := [{$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}DecimalSeparator, '+', '-', '0'..'9', 'E', 'e'];
 end;
 
 { TZExtendedField }
@@ -6892,11 +7053,35 @@ begin
 end;
 
 procedure TZExtendedField.GetText(var Text: string; DisplayText: Boolean);
+var
+  Format: TFloatFormat;
+  FmtStr: string;
+  Digits: Integer;
+  F: Extended;
 begin
   if IsNull then
     Text := ''
   else
-    InternalGetText(GetAsExtended, Text, DisplayText);
+  begin
+    F := GetAsExtended;
+    if DisplayText or (FEditFormat = '') then
+      FmtStr := FDisplayFormat else
+      FmtStr := FEditFormat;
+    if FmtStr = '' then
+    begin
+      if FCurrency then
+      begin
+        if DisplayText then Format := ffCurrency else Format := ffFixed;
+        Digits := {$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}CurrencyDecimals;
+      end
+      else begin
+        Format := ffGeneral;
+        Digits := 0;
+      end;
+      Text := FloatToStrF(F, Format, FPrecision, Digits);
+    end else
+      Text := FormatFloat(FmtStr, F);
+  end;
 end;
 
 constructor TZExtendedField.Create(AOwner: TComponent);
@@ -6904,6 +7089,7 @@ begin
   inherited Create(AOwner);
   SetDataType({$IFDEF WITH_FTEXTENDED}ftExtended{$ELSE}ftFloat{$ENDIF});
   FPrecision := 19;
+  ValidChars := [{$IFDEF WITH_FORMATSETTINGS}FormatSettings.{$ENDIF}DecimalSeparator, '+', '-', '0'..'9', 'E', 'e'];
 end;
 
 { TZFieldDef }
@@ -7392,3 +7578,6 @@ end;
 {$ENDIF !WITH_TDATASETFIELD}
 
 end.
+
+
+

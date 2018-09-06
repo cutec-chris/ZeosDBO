@@ -75,6 +75,7 @@ type
   { TZLoggingFormatter }
   {** Defines a object for logging event. }
   TZLoggingFormatter = class (TInterfacedObject, IZLoggingFormatter)
+  private
   public
     function Format(LoggingEvent: TZLoggingEvent) : RawByteString; virtual;
   end;
@@ -117,52 +118,36 @@ type
 implementation
 
 uses {$IFDEF WITH_UNITANSISTRINGS}AnsiStrings, {$ENDIF}
-  ZFastCode, ZSysUtils, ZDbcUtils;
+  ZFastCode, ZSysUtils;
 
 var DefaultLoggingFormatter: TZLoggingFormatter;
 
 { TZLoggingFormatter }
 
 function TZLoggingFormatter.Format(LoggingEvent: TZLoggingEvent): RawByteString;
-var Buf: TRawBuff;
 begin
-  Result := {$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(FormatDateTime('yyyy-mm-dd hh:mm:ss', LoggingEvent.Timestamp));
-  Buf.Pos := 0;
-  ToBuff(' cat: ', Buf, Result);
+  Result := {$IFDEF UNICODE}UnicodeStringToAscii7{$ENDIF}(FormatDateTime('yyyy-mm-dd hh:mm:ss', LoggingEvent.Timestamp)) + ' cat: ';
   case LoggingEvent.Category of
-    lcConnect: ToBuff('Connect', Buf, Result);
-    lcDisconnect: ToBuff('Disconnect', Buf, Result);
-    lcTransaction: ToBuff('Transaction', Buf, Result);
-    lcExecute: ToBuff('Execute', Buf, Result);
-    lcPrepStmt: ToBuff('Prepare', Buf, Result);
-    lcBindPrepStmt: ToBuff('Bind prepared', Buf, Result);
-    lcExecPrepStmt: ToBuff('Execute prepared', Buf, Result);
-    lcUnprepStmt: ToBuff('Unprepare prepared', Buf, Result);
+    lcConnect: Result := Result + 'Connect';
+    lcDisconnect: Result := Result + 'Disconnect';
+    lcTransaction: Result := Result + 'Transaction';
+    lcExecute: Result := Result + 'Execute';
+    lcPrepStmt: Result := Result + 'Prepare';
+    lcBindPrepStmt: Result := Result + 'Bind prepared';
+    lcExecPrepStmt: Result := Result + 'Execute prepared';
+    lcUnprepStmt: Result := Result + 'Unprepare prepared';
   else
-    ToBuff('Other', Buf, Result);
+    Result := Result + 'Other';
   end;
-  if LoggingEvent.Protocol <> EmptyRaw then begin
-    ToBuff(', proto: ', Buf, Result);
-    ToBuff(LoggingEvent.Protocol, Buf, Result);
+  if LoggingEvent.Protocol <> '' then
+    Result := Result + ', proto: ' + LoggingEvent.Protocol;
+  Result := Result + ', msg: ' + LoggingEvent.Message;
+  if (LoggingEvent.ErrorCode <> 0) or (LoggingEvent.Error <> '') then
+  begin
+    Result := Result + ', errcode: ' + IntToRaw(LoggingEvent.ErrorCode)
+      + ', error: ' + LoggingEvent.Error;
   end;
-  ToBuff(', msg: ', Buf, Result);
-  ToBuff(LoggingEvent.Message, Buf, Result);
-  if (LoggingEvent.ErrorCode <> 0) or (LoggingEvent.Error <> EmptyRaw) then begin
-    ToBuff(', errcode: ', Buf, Result);
-    ToBuff(IntToRaw(LoggingEvent.ErrorCode), Buf, Result);
-    ToBuff(', error: ', Buf, Result);
-    ToBuff(LoggingEvent.Error, Buf, Result);
-  end;
-  FlushBuff(Buf, Result);
 end;
-
-{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
-procedure TZLoggingFormatter.ToBuff(const Value: String;
-  var Result: RawByteString);
-begin
-  ToBuff(UnicodeStringToAscii7(Value), Result);
-end;
-{$ENDIF}
 
 { TZLoggingEvent }
 

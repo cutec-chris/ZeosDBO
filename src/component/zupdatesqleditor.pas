@@ -131,7 +131,6 @@ type
     FSettingsChanged: Boolean;
     FDatasetDefaults: Boolean;
     SQLText: array[TUpdateKind] of TStrings;
-    function QuoteIfChecked(const Ident: string): string;
     function GetTableRef(const TabName: string): string;
     function Edit: Boolean;
     procedure GenWhereClause(const TabAlias: string; KeyFields, SQL: TStrings);
@@ -200,6 +199,15 @@ implementation
 uses Dialogs, {$IFNDEF FPC}LibHelp, {$ENDIF}TypInfo, ZCompatibility, ZSqlMetadata,
   ZDbcIntfs, ZTokenizer, ZGenericSqlAnalyser, ZSelectSchema, ZDbcMetadata;
 
+function InternalQuoteIdentifier(const S, QuoteString: string): string;
+begin
+  Result := S;
+  if Length(QuoteString) > 1 then
+    Result := QuoteString[1] + Result + QuoteString[2]
+  else if Length(QuoteString) = 1 then
+    Result := QuoteString[1] + Result + QuoteString[1];
+end;
+
 { TZUpdateSqlEditor }
 
 procedure TZUpdateSqlEditor.ExecuteVerb(Index: Integer);
@@ -208,10 +216,17 @@ begin
     EditUpdateSQL(TZUpdateSQL(Component));
 end;
 
+{$IFDEF FPC}
+  {$HINTS OFF}
+{$ENDIF}
 function TZUpdateSqlEditor.GetVerb(Index: Integer): string;
 begin
   Result := 'UpdateSql editor...';
 end;
+{$IFDEF FPC}
+  {$HINTS ON}
+{$ENDIF}
+
 
 function TZUpdateSqlEditor.GetVerbCount: Integer;
 begin
@@ -293,7 +308,7 @@ begin
   end;
 end;
 
-procedure GetDataKeyNames(Dataset: TDataset; const ErrorName: string; List: TStrings);
+procedure GetDataKeyNames(Dataset: TDataset; ErrorName: string; List: TStrings);
 var
   I: Integer;
 begin
@@ -319,7 +334,7 @@ begin
   end;
 end;
 
-procedure GetDataFieldNames(Dataset: TDataset; const ErrorName: string; List: TStrings);
+procedure GetDataFieldNames(Dataset: TDataset; ErrorName: string; List: TStrings);
 var
   I: Integer;
 begin
@@ -646,8 +661,10 @@ begin
   SQL.Add('WHERE'); { Do not localize }
   for I := 0 to KeyFields.Count - 1 do
   begin
-    FieldName := QuoteIfChecked(KeyFields[I]);
+    FieldName := KeyFields[I];
     OldFieldName := 'OLD_' + FieldName;
+    if QuoteFields.Checked then
+      FieldName := InternalQuoteIdentifier(FieldName, QuoteChar);
     if not Assigned(KeyFields.Objects[I]) then
       BindText := Format('  %s%s = :%s', { Do not localize }
         [TabAlias, FieldName, OldFieldName])
@@ -683,8 +700,8 @@ procedure TZUpdateSQLEditForm.GenInsertSQL(const TableName: string;
     begin
       if I = UpdateFields.Count - 1 then Comma := '';
       FieldName := UpdateFields[I];
-      if ParamChar = '' then
-        FieldName := QuoteIfChecked(FieldName);
+      if QuoteFields.Checked and (ParamChar = '') then
+        FieldName := InternalQuoteIdentifier(FieldName, QuoteChar);
       L := Format('%s%s%s%s',[L, ParamChar, FieldName, Comma]);
       if (Length(L) > 70) and (I <> UpdateFields.Count - 1) then
       begin
@@ -716,7 +733,9 @@ begin
   for I := 0 to UpdateFields.Count - 1 do
   begin
     if I = UpdateFields.Count -1 then Comma := '';
-    FieldName := QuoteIfChecked(UpdateFields[I]);
+    FieldName := UpdateFields[I];
+    if QuoteFields.Checked then
+      FieldName := InternalQuoteIdentifier(FieldName, QuoteChar);
     SQL.Add(Format('  %s = :%s%s',
       [FieldName, UpdateFields[I], Comma]));
   end;
@@ -724,6 +743,15 @@ begin
 end;
 
 procedure TZUpdateSQLEditForm.GenerateSQL;
+
+  function QuotedTableName(const BaseName: string): string;
+  begin
+    if QuoteFields.Checked then
+      Result := InternalQuoteIdentifier(BaseName, QuoteChar)
+    else
+      Result := BaseName;
+  end;
+
 var
   KeyFields: TStringList;
   UpdateFields: TStringList;
@@ -737,7 +765,7 @@ begin
     UpdateFields := TStringList.Create;
     try
       GetSelectedItems(UpdateFieldList, UpdateFields);
-      TableName := QuoteIfChecked(UpdateTableName.Text);
+      TableName := QuotedTableName(UpdateTableName.Text);
       if (SQLText[ukDelete].Text <> '') or (SQLText[ukInsert].Text <> '') or (SQLText[ukModify].Text <> '') then
         if MessageDlg('The SQL property is not empty. Do you want to clear it before the generation?', mtWarning, [mbYes, mbNo], 0) = mrYes then
         begin
@@ -800,18 +828,6 @@ begin
       end;
     end;
     FDatasetDefaults := False;
-  end;
-end;
-
-function TZUpdateSQLEditForm.QuoteIfChecked(const Ident: string): string;
-begin
-  Result := Ident;
-  if QuoteFields.Checked then
-  begin
-    case Length(QuoteChar) of
-      1: Result := QuoteChar[1] + Result + QuoteChar[1];
-      2: Result := QuoteChar[1] + Result + QuoteChar[2];
-    end;
   end;
 end;
 

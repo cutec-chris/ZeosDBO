@@ -248,7 +248,7 @@ type
     function UncachedGetUDTs(const Catalog: string; const SchemaPattern: string;
       const TypeNamePattern: string; const Types: TIntegerDynArray): IZResultSet; override;
   public
-    constructor Create(Connection: TZAbstractDbcConnection; const Url: TZURL); override;
+    constructor Create(Connection: TZAbstractConnection; const Url: TZURL); override;
   end;
 
 implementation
@@ -1231,7 +1231,7 @@ end;
   @param Url a database connection url string.
   @param Info an extra connection properties.
 }
-constructor TZASADatabaseMetadata.Create(Connection: TZAbstractDbcConnection;
+constructor TZASADatabaseMetadata.Create(Connection: TZAbstractConnection;
   const Url: TZURL);
 begin
   inherited Create(Connection, Url);
@@ -1239,11 +1239,11 @@ begin
 end;
 
 {**
-  Composes a object name, SQLQuotedStr or NullText
+  Composes a object name, AnsiQuotedStr or NullText
   @param S the object string
   @param NullText the "NULL"-Text default: 'null'
   @param QuoteChar the QuoteChar default: '
-  @return 'null' if S is '' or S if s is already Quoted or SQLQuotedStr(S, #39)
+  @return 'null' if S is '' or S if s is already Quoted or AnsiQuotedStr(S, #39)
 }
 function TZASADatabaseMetadata.ComposeObjectString(const S: String;
   Const NullText: String = 'null'; QuoteChar: Char = #39): String;
@@ -1253,7 +1253,7 @@ begin
   else begin
     Result := ConvertEscapes(S);
     if not IC.IsQuoted(Result) then
-      Result := SQLQuotedStr(Result, QuoteChar);
+      Result := AnsiQuotedStr(Result, QuoteChar);
   end;
 end;
 
@@ -1269,7 +1269,7 @@ end;
 
 function TZASADatabaseMetadata.DecomposeObjectString(const S: String): String;
 begin
-  Result := SQLQuotedStr(Inherited DecomposeObjectString(S), #39);
+  Result := AnsiQuotedStr(Inherited DecomposeObjectString(S), #39);
 end;
 
 {**
@@ -1470,7 +1470,11 @@ begin
 
   TableTypes := '';
   for I := 0 to Length(Types) - 1 do
-    AppendSepString(TableTypes, SQLQuotedStr(Types[I], ''''), ',');
+  begin
+    if TableTypes <> '' then
+      TableTypes := TableTypes + ',';
+    TableTypes := TableTypes + AnsiQuotedStr(Types[I], '''');
+  end;
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_tables %s, %s, %s, %s',
@@ -2344,8 +2348,8 @@ var
 begin
   Result:=inherited UncachedGetIndexInfo(Catalog, Schema, Table, Unique, Approximate);
 
-  Is_Unique := SQLQuotedStr(BoolStrInts[Unique], '''');
-  Accuracy := SQLQuotedStr(BoolStrInts[Approximate], '''');
+  Is_Unique := AnsiQuotedStr(BoolStrInts[Unique], '''');
+  Accuracy := AnsiQuotedStr(BoolStrInts[Approximate], '''');
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getindexinfo %s, %s, %s, %s, %s',
@@ -2419,7 +2423,11 @@ begin
 
   UDTypes := '';
   for I := 0 to Length(Types) - 1 do
-    AppendSepString(UDTypes, SQLQuotedStr(ZFastCode.IntToStr(Types[I]), ''''), ',');
+  begin
+    if Length(UDTypes) > 0 then
+      UDTypes := UDTypes + ',';
+    UDTypes := UDTypes + AnsiQuotedStr(ZFastCode.IntToStr(Types[I]), '''');
+  end;
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getudts %s, %s, %s, %s',

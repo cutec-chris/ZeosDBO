@@ -87,8 +87,6 @@ type
   // technobot 2008-06-27 - methods moved as is from TZPostgreSQLDatabaseMetadata:
   {** Implements PostgreSQL Database Information. }
   TZPostgreSQLDatabaseInfo = class(TZAbstractDatabaseInfo, IZPostgreSQLDatabaseInfo)
-  private
-    fSupportsDMLBatches: Boolean;
   protected
     function GetMaxIndexKeys: Integer;
     function GetMaxNameLength: Integer;
@@ -175,7 +173,6 @@ type
     function SupportsResultSetConcurrency(const _Type: TZResultSetType;
       const Concurrency: TZResultSetConcurrency): Boolean; override;
 //    function SupportsBatchUpdates: Boolean; override; -> Not implemented
-    function SupportsArrayBindings: Boolean; override;
 
     // maxima:
     function GetMaxBinaryLiteralLength: Integer; override;
@@ -266,7 +263,7 @@ type
     // (technobot) end of questioned section
 
     function EscapeString(const S: string): string; override;
-    function UncachedGetTables(const Catalog: string; const SchemaPattern: string;
+    function UncachedGetTables(const {%H-}Catalog: string; const SchemaPattern: string;
       const TableNamePattern: string; const Types: TStringDynArray): IZResultSet; override;
     function UncachedGetSchemas: IZResultSet; override;
     function UncachedGetCatalogs: IZResultSet; override;
@@ -319,11 +316,8 @@ uses
   @param Metadata the interface of the correpsonding database metadata object
 }
 constructor TZPostgreSQLDatabaseInfo.Create(const Metadata: TZAbstractDatabaseMetadata);
-var PlainDriver: TZPostgreSQLPlainDriver;
 begin
-  inherited Create(Metadata);
-  PlainDriver := TZPostgreSQLPlainDriver(Metadata.GetConnection.GetIZPlainDriver.GetInstance);
-  fSupportsDMLBatches := Assigned(PlainDriver.PQexecParams) and Assigned(PlainDriver.PQexecPrepared);
+  inherited;
 end;
 
 {**
@@ -759,11 +753,6 @@ end;
   Can a catalog name be used in a data manipulation statement?
   @return <code>true</code> if so; <code>false</code> otherwise
 }
-function TZPostgreSQLDatabaseInfo.SupportsArrayBindings: Boolean;
-begin
-  Result := fSupportsDMLBatches;
-end;
-
 function TZPostgreSQLDatabaseInfo.SupportsCatalogsInDataManipulation: Boolean;
 begin
   Result := False;
@@ -3675,18 +3664,18 @@ function TZPostgreSQLIdentifierConvertor.ExtractQuote(
 var
   QuoteDelim: string;
 begin
-  if IsQuoted(Value) then
-  begin
-    QuoteDelim := Metadata.GetDatabaseInfo.GetIdentifierQuoteString;
-    case Length(QuoteDelim) of
-      1: Result := SQLDequotedStr(Value, QuoteDelim[1]);
-      2: Result := SQLDequotedStr(Value, QuoteDelim[1], QuoteDelim[2]);
-      else
-        Result := Value;
-    end;
-  end
-  else
-    Result := AnsiLowerCase(Value);
+  QuoteDelim := Metadata.GetDatabaseInfo.GetIdentifierQuoteString;
+  Result := Value;
+  if (QuoteDelim <> '') and (Value <> '') then
+    if (Value[1]=QuoteDelim[1]) and
+      (Value[Length(Value)]=QuoteDelim[1]) then
+    begin
+      Result:=copy(Value,2,length(Value)-2);
+      Result:=StringReplace(Result,QuoteDelim+QuoteDelim,QuoteDelim,[rfReplaceAll]);
+    end
+    else
+      Result := AnsiLowerCase(Value);
+
 end;
 
 function TZPostgreSQLIdentifierConvertor.IsQuoted(const Value: string): Boolean;
@@ -3695,8 +3684,8 @@ var
 begin
   QuoteDelim := Metadata.GetDatabaseInfo.GetIdentifierQuoteString;
   Result := (QuoteDelim <> '') and (Value <> '') and
-            (Value[1] = QuoteDelim[1]) and
-            (Value[Length(Value)] = QuoteDelim[Length(QuoteDelim)]);
+            (Value[1]=QuoteDelim[1]) and
+            (Value[Length(Value)]=QuoteDelim[1]);
 end;
 
 function TZPostgreSQLIdentifierConvertor.IsSpecialCase(
@@ -3728,13 +3717,9 @@ begin
   if IsCaseSensitive(Value) then
   begin
     QuoteDelim := Metadata.GetDatabaseInfo.GetIdentifierQuoteString;
-    case Length(QuoteDelim) of
-      0: Result := Value;
-      1: Result := SQLQuotedStr(Value, QuoteDelim[1]);
-      2: Result := SQLQuotedStr(Value, QuoteDelim[1], QuoteDelim[2]);
-      else
-        Result := Value;
-    end;
+    Result := QuoteDelim +
+              StringReplace(Result,QuoteDelim,QuoteDelim+QuoteDelim,[rfReplaceAll]) +
+              QuoteDelim;
   end;
 end;
 

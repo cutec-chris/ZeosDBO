@@ -118,7 +118,7 @@ type
 
 implementation
 
-uses ZCompatibility, ZFastCode, ZSysUtils, ZConnProperties;
+uses ZCompatibility, ZFastCode, ZSysUtils;
 
 // escape the ';' char to #9 and LineEnding to ';'
 function Escape(const S: string): string; {$IFDEF WITH_INLINE}inline;{$ENDIF}
@@ -167,7 +167,6 @@ begin
   Self.URL := AURL;
 end;
 
-// Values from Info overwrite those from URL
 constructor TZURL.Create(const AURL: String; Info: TStrings);
 begin
   Create(AURL);
@@ -180,9 +179,6 @@ begin
   Create(AURL.URL);
 end;
 
-// Values from parameters overwrite those from URL and values from Info overwrite both
-// TODO: this method is odd... properties of URL, except protocol, get overridden
-// with parameters. Likely AProtocol should go here instead of AURL
 constructor TZURL.Create(Const AURL, AHostName: string; const APort: Integer;
   const ADatabase, AUser, APassword: string; Info: TStrings);
 begin
@@ -382,23 +378,24 @@ var
 begin
   FProperties.OnChange := nil; // prevent re-entering
 
-  S := ExtractValueFromProperties(ConnProps_UID);
+  // Assign UserName, Password and LibLocation if they're set in Properties
+  S := ExtractValueFromProperties('UID');
   if S <> '' then
     UserName := S;
 
-  S := ExtractValueFromProperties(ConnProps_Username);
+  S := ExtractValueFromProperties('username');
   if S <> '' then
     UserName := S;
 
-  S := ExtractValueFromProperties(ConnProps_PWD);
+  S := ExtractValueFromProperties('PWD');
   if S <> '' then
     Password := S;
 
-  S := ExtractValueFromProperties(ConnProps_Password);
+  S := ExtractValueFromProperties('password');
   if S <> '' then
     Password := S;
 
-  S := ExtractValueFromProperties(ConnProps_LibLocation);
+  S := ExtractValueFromProperties('LibLocation');
   if S <> '' then
     LibLocation := S;
 
@@ -416,7 +413,7 @@ begin
   FProperties.BeginUpdate; // prevent calling OnChange on every iteration
   for I := 0 to Values.Count -1 do
   begin
-    BreakString(Values[I], '=', Param, Value);
+    BreakString(Values[I], '=', Param{%H-}, Value{%H-});
     if Value <> '' then
       FProperties.Values[Param] := Value
     else

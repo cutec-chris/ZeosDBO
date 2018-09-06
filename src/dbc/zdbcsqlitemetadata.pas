@@ -244,7 +244,7 @@ type
 implementation
 
 uses
-  ZDbcUtils, ZDbcSqLite, ZFastCode, ZSelectSchema, ZClasses;
+  ZDbcUtils, ZDbcSqLite, ZFastCode, ZSelectSchema;
 
 { TZSQLiteDatabaseInfo }
 
@@ -1446,15 +1446,6 @@ begin
     end;
     Close;
   end;
-  if Result.IsBeforeFirst then begin
-    Result.MoveToInsertRow;
-    if Schema <> '' then
-      Result.UpdateString(CatalogNameIndex, Schema);
-    Result.UpdateString(TableNameIndex, Table);
-    Result.UpdateRawByteString(PrimaryKeyColumnNameIndex, 'rowid');
-    Result.UpdateInt(PrimaryKeyKeySeqIndex, 0);
-    Result.InsertRow;
-  end;
 end;
 
 {**
@@ -1631,7 +1622,7 @@ begin
     begin
       while MainResultSet.Next do
       begin
-        if (ZFastCode.Pos({$IFDEF NO_ANSISTRING}RawByteString{$ELSE}AnsiString{$ENDIF}(' autoindex '), MainResultSet.GetRawByteString(main_name_field_index)) = 0)
+        if (ZFastCode.Pos(AnsiString(' autoindex '), MainResultSet.GetRawByteString(main_name_field_index)) = 0)
           and ((Unique = False) or (MainResultSet.GetInt(main_unique_field_index) = 0)) then
         begin
           ResultSet := GetConnection.CreateStatement.ExecuteQuery(
@@ -1646,7 +1637,7 @@ begin
             Result.UpdatePAnsiChar(IndexInfoColIndexNameIndex, MainResultSet.GetPAnsiChar(main_name_field_index, Len), @Len);
             Result.UpdateInt(IndexInfoColOrdPositionIndex, ResultSet.GetInt(sub_seqno_field_index)+FirstDbcIndex);
             Result.UpdatePAnsiChar(IndexInfoColColumnNameIndex, ResultSet.GetPAnsiChar(sub_name_field_index, Len), @Len);
-            Result.UpdateRawByteString(IndexInfoColAscOrDescIndex, 'A');
+            Result.UpdateString(IndexInfoColAscOrDescIndex, 'A');
             Result.UpdateInt(IndexInfoColCardinalityIndex, 0);
             Result.UpdateInt(IndexInfoColPagesIndex, 0);
             Result.InsertRow;
@@ -1693,7 +1684,7 @@ These constant define integer codes that represent the various text encodings su
 
   Result:=inherited UncachedGetCharacterSets;
 
-  for i := Low(Encodings) to High(Encodings) do
+  for i := 0 to high(Encodings) do
   begin
     Result.MoveToInsertRow;
     Result.UpdateString(CharacterSetsNameIndex, Encodings[i].CP); //CHARACTER_SET_NAME

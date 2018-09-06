@@ -95,6 +95,12 @@ type
   PWord                 = ^Word; // M.A.
   {$ENDIF}
 {$ENDIF}
+  // EgonHugeist: Use always a 4Byte unsigned Integer for Windows otherwise MySQL64 has problems on Win64!
+  // don't know anything about reported issues on other OS's
+  ULong                 = {$IFDEF MSWINDOWS}LongWord{$ELSE}NativeUInt{$ENDIF};
+  ULongLong             = UInt64;
+  PULong                = ^ULong;
+  PULongLong            = ^ULongLong;
 
   UInt                  = LongWord;
   PUInt                 = ^UInt;
@@ -111,12 +117,6 @@ type
   ArrayLenInt           = NativeInt;
   PArrayLenInt          = ^ArrayLenInt;
 
-  {$IF not declared(AnsiChar)}
-  AnsiChar = Byte;
-  PAnsiChar = MarshaledAString;
-  PPAnsiChar = ^PAnsiChar;
-  {$IFEND}
-
 const
   {$IFDEF FPC}
   { ustrings.inc/astrings.inc:
@@ -132,22 +132,16 @@ const
   StringRefCntOffSet          = SizeOf(LongInt){PStrRec.RefCnt}+SizeOf(LongInt){PStrRec.Len};
   {$ENDIF}
   ArrayLenOffSet              = SizeOf(ArrayLenInt);
-
-  {$IF NOT DECLARED(SecsPerHour)}
-  SecsPerHour = SecsPerMin * MinsPerHour;
-  {$IFEND}
-
 type
-  PZCharRec = ^TZCharRec;
   TZCharRec = Record
     Len: Cardinal; //Length of String
     P: Pointer;    //Allocated Mem of String including #0 terminator
     CP: Word;      //CodePage of the String
   end;
 
-  {$IF NOT DECLARED(TBytes)}
+  {$IFNDEF HAVE_TBYTES}
   TBytes = TByteDynArray;
-  {$IFEND}
+  {$ENDIF}
 
   TObjectDynArray       = array of TObject;
 
@@ -169,27 +163,15 @@ var
   DBScreen: IDBScreen;
 {$ENDIF}
 
+{$IFNDEF FPC} //delphi and windows
 const
-  DefDateFormatDMY = 'DD-MM-YYYY';
-  DefDateFormatYMD = 'YYYY-MM-DD';
-  DefTimeFormat = 'HH:NN:SS';
-  DefTimeFormatMsecs = 'HH:NN:SS.ZZZ';
-  DefDateTimeFormat = DefDateFormatDMY + ' ' + DefTimeFormat;
-  DefDateTimeFormatMsecs = DefDateFormatDMY + ' ' + DefTimeFormatMsecs;
-
-{$IF NOT DECLARED(LineEnding)} // FPC-style constant, declare for Delphi
-const
-  LineEnding = sLineBreak;
-{$IFEND}
-
-{$IF NOT DECLARED(AnsiProperCase)} // FPC has this function in RTL
-{$DEFINE ZAnsiProperCase}
-const
+  LineEnding = #13#10;
   Brackets = ['(',')','[',']','{','}'];
   StdWordDelims = [#0..' ',',','.',';','/','\',':','''','"','`'] + Brackets;
 
-function AnsiProperCase(const S: string; const WordDelims: {$IFDEF WITH_TSYSCHARSET_DEPRECATED} String {$ELSE} TSysCharSet {$ENDIF}): string;
-{$IFEND}
+function AnsiProperCase(const S: string; const WordDelims: TSysCharSet): string;
+
+{$ENDIF}
 
 {$IFDEF WINDOWS}
 const SharedSuffix='.dll';
@@ -220,22 +202,16 @@ function GetProcAddress(Module: HMODULE; Proc: PChar): Pointer;
   {$ENDIF}
 {$ENDIF}
 
+{EgonHugeist:}
 type
   {$IFNDEF WITH_RAWBYTESTRING}
-    {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}
-    RawByteString = TBytes;
-    {$ELSE}
-    RawByteString = AnsiString;
-    {$ENDIF}
+  RawByteString = AnsiString;
   {$ENDIF}
 
   ZWideString = {$IFDEF PWIDECHAR_IS_PUNICODECHAR}UnicodeString{$ELSE}WideString{$ENDIF};
 
   {$IF not declared(TBooleanDynArray)}
   TBooleanDynArray        = array of Boolean;
-  {$IFEND}
-  {$IF not declared(PBooleanDynArray)}
-  PBooleanDynArray        = ^TBooleanDynArray;
   {$IFEND}
   {$IF not declared(TByteDynArray)}
   TByteDynArray           = array of Byte;
@@ -279,10 +255,10 @@ type
   {$IF not declared(TDateTimeDynArray)}
   TDateTimeDynArray       = array of TDateTime;
   {$IFEND}
-  {$IF not declared(TUTF8StringDynArray) and not defined(NO_UTF8STRING)}
+  {$IF not declared(TUTF8StringDynArray)}
   TUTF8StringDynArray     = array of UTF8String;
   {$IFEND}
-  {$IF not declared(TAnsiStringDynArray) and not defined(NO_ANSISTRING)}
+  {$IF not declared(TAnsiStringDynArray)}
   TAnsiStringDynArray     = array of AnsiString;
   {$IFEND}
   {$IF not declared(TRawByteStringDynArray)}
@@ -307,26 +283,21 @@ type
   TPointerDynArray  = array of Pointer;
   {$IFEND}
   TZCharRecDynArray = array of TZCharRec;
-
 type
   {declare move or converter functions for the String Types}
-  {$IFNDEF NO_ANSISTRING}
+  TPRawToUTF8 = function(const Src: PAnsiChar; Len: NativeUInt; const RawCP: Word): UTF8String;
   TZAnsiToRaw = function (const Src: AnsiString; const RawCP: Word): RawByteString;
   TZRawToAnsi = function (const Src: RawByteString; const RawCP: Word): AnsiString;
   TZAnsiToUTF8 = function (const Src: AnsiString): UTF8String;
   TZUTF8ToAnsi = function (const Src: UTF8String): AnsiString;
-  TZAnsiToString = function (const Src: AnsiString; const StringCP: Word): String;
-  TZStringToAnsi = function (const Src: String; const StringCP: Word): AnsiString;
-  {$ENDIF}
-  {$IFNDEF NO_UTF8STRING}
-  TPRawToUTF8 = function(const Src: PAnsiChar; Len: NativeUInt; const RawCP: Word): UTF8String;
   TZRawToUTF8 = function (const Src: RawByteString; const CP: Word): UTF8String;
   TZUTF8ToRaw = function (const Src: UTF8String; const CP: Word): RawByteString;
-  TZUTF8ToString = function (const Src: UTF8String; const StringCP: Word): String;
-  TZStringToUTF8 = function (const Src: String; const StringCP: Word): UTF8String;
-  {$ENDIF}
   TZRawToString = function (const Src: RawByteString; const RawCP, StringCP: Word): String;
   TZStringToRaw = function (const Src: String; const StringCP, RawCP: Word): RawByteString;
+  TZUTF8ToString = function (const Src: UTF8String; const StringCP: Word): String;
+  TZStringToUTF8 = function (const Src: String; const StringCP: Word): UTF8String;
+  TZAnsiToString = function (const Src: AnsiString; const StringCP: Word): String;
+  TZStringToAnsi = function (const Src: String; const StringCP: Word): AnsiString;
   TZRawToUnicode = function (const S: RawByteString; const CP: Word): ZWideString;
   TZUnicodeToRaw = function (const US: ZWideString; CP: Word): RawByteString;
   TZUnicodeToString = function (const Src: ZWideString; const StringCP: Word): String;
@@ -358,29 +329,25 @@ type
   end;
 
   TConvertEncodingFunctions = record
-    {$IFNDEF NO_ANSISTRING}
     ZAnsiToUTF8: TZAnsiToUTF8;
     ZUTF8ToAnsi: TZUTF8ToAnsi;
-    ZRawToAnsi: TZRawToAnsi;
-    ZAnsiToString: TZAnsiToString;
-    ZStringToAnsi: TZStringToAnsi;
-    ZAnsiToRaw: TZAnsiToRaw;
-    {$ENDIF}
-    {$IFNDEF NO_UTF8STRING}
     ZUTF8ToString: TZUTF8ToString;
     ZStringToUTF8: TZStringToUTF8;
+    ZAnsiToRaw: TZAnsiToRaw;
+    ZRawToAnsi: TZRawToAnsi;
     ZRawToUTF8: TZRawToUTF8;
     ZUTF8ToRaw: TZUTF8ToRaw;
-    ZPRawToUTF8: TPRawToUTF8;
-    {$ENDIF}
     ZStringToRaw: TZStringToRaw;
     ZRawToString: TZRawToString;
+    ZAnsiToString: TZAnsiToString;
+    ZStringToAnsi: TZStringToAnsi;
     ZUnicodeToRaw: TZUnicodeToRaw;
     ZRawToUnicode: TZRawToUnicode;
     ZUnicodeToString: TZUnicodeToString;
     ZStringToUnicode: TZStringToUnicode;
     ZPRawToString: TPRawToString;
     ZPUnicodeToString: TPUnicodeToString;
+    ZPRawToUTF8: TPRawToUTF8;
   end;
 
   TZFormatSettings = Record
@@ -439,80 +406,66 @@ function UTF8ToString(const s: RawByteString): ZWideString;
 function Hash(const S : RawByteString) : LongWord; overload;
 function Hash(const Key : ZWideString) : Cardinal; overload;
 
-{$IFNDEF NO_ANSISTRING}
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: {$IFDEF UNICODE}AnsiString{$ELSE}String{$ENDIF}); overload;// {$IFDEF WITH_INLINE}Inline;{$ENDIF}
-{$ENDIF}
-{$IFNDEF NO_UTF8STRING}
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: UTF8String); overload;// {$IFDEF WITH_INLINE}Inline;{$ENDIF}
-{$ENDIF}
 procedure ZSetString(Src: PAnsiChar; const Len: LengthInt; var Dest: ZWideString); overload;// {$IFDEF WITH_INLINE}Inline;{$ENDIF}
-{$IF defined (WITH_RAWBYTESTRING) or defined(WITH_TBYTES_AS_RAWBYTESTRING)}
+{$IFDEF WITH_RAWBYTESTRING}
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: RawByteString); overload;// {$IFDEF WITH_INLINE}Inline;{$ENDIF}
-{$IFEND}
-
-function RawConcat(const Vals: array of RawByteString): RawByteString;
+{$ENDIF}
 
 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}
 function Min(const A, B: NativeUInt): NativeUInt; overload; {$IFDEF WITH_INLINE}Inline;{$ENDIF}
 function Max(const A, B: NativeUInt): NativeUInt; overload; {$IFDEF WITH_INLINE}Inline;{$ENDIF}
 {$ENDIF}
 
-{$IF NOT DEFINED(FPC) AND NOT DECLARED(ReturnAddress)} // intrinsic since XE2
-{$DEFINE ZReturnAddress}
-function ReturnAddress: Pointer;
-{$IFEND}
-
 var
-  {$IFDEF FPC}
-    {$PUSH}
-    {$WARN 3177 off : Some fields coming after "$1" were not initialized}
-    {$WARN 3175 off : Some fields coming before "$1" were not initialized}
-  {$ENDIF}
   ClientCodePageDummy: TZCodepage =
-    (CharWidth: 1; Encoding: ceAnsi; CP: $ffff);
+    (Name: ''; ID: 0; CharWidth: 1; Encoding: ceAnsi;
+      CP: $ffff; ZAlias: ''{%H-});
 
   ConSettingsDummy: TZConSettings =
     (AutoEncode: False;
       CPType: {$IFDEF DELPHI}{$IFDEF UNICODE}cCP_UTF16{$ELSE}cGET_ACP{$ENDIF}{$ELSE}cCP_UTF8{$ENDIF};
-      ClientCodePage: @ClientCodePageDummy;
+      ClientCodePage: {%H-}@ClientCodePageDummy;
       DisplayFormatSettings:
-          (DateFormat: DefDateFormatDMY;
-          DateFormatLen: Length(DefDateFormatDMY);
-          TimeFormat: DefTimeFormatMsecs;
-          TimeFormatLen: Length(DefTimeFormatMsecs);
-          DateTimeFormat: DefDateTimeFormat;
-          DateTimeFormatLen: Length(DefDateTimeFormat));
+        (DateFormat: 'DD-MM-YYYY';
+          DateFormatLen: 10;
+          TimeFormat: 'HH:NN:SS.ZZZ';
+          TimeFormatLen: 12;
+          DateTimeFormat: 'DD-MM-YYYY HH:NN:SS';
+          DateTimeFormatLen: 23);
       ReadFormatSettings:
-          (DateFormat: DefDateFormatDMY;
-          DateFormatLen: Length(DefDateFormatDMY);
-          TimeFormat: DefTimeFormatMsecs;
-          TimeFormatLen: Length(DefTimeFormatMsecs);
-          DateTimeFormat: DefDateTimeFormatMsecs;
-          DateTimeFormatLen: Length(DefDateTimeFormatMsecs));
+          (DateFormat: 'DD-MM-YYYY';
+          DateFormatLen: 10;
+          TimeFormat: 'HH:NN:SS.ZZZ';
+          TimeFormatLen: 12;
+          DateTimeFormat: 'DD-MM-YYYY HH:NN:SS.ZZZ';
+          DateTimeFormatLen: 23);
       WriteFormatSettings:
-          (DateFormat: DefDateFormatDMY;
-          DateFormatLen: Length(DefDateFormatDMY);
-          TimeFormat: DefTimeFormatMsecs;
-          TimeFormatLen: Length(DefTimeFormatMsecs);
-          DateTimeFormat: DefDateTimeFormatMsecs;
-          DateTimeFormatLen: Length(DefDateTimeFormatMsecs));
+          (DateFormat: 'DD-MM-YYYY';
+          DateFormatLen: 10;
+          TimeFormat: 'HH:NN:SS.ZZZ';
+          TimeFormatLen: 12;
+          DateTimeFormat: 'DD-MM-YYYY HH:NN:SS.ZZZ';
+          DateTimeFormatLen: 23);
       {$IFDEF WITH_LCONVENCODING}
       PlainConvertFunc: @NoConvert;
       DbcConvertFunc: @NoConvert;
       {$ENDIF}
-    );
-  {$IFDEF FPC} {$POP} {$ENDIF}
+    {%H-});
 
 const
   PEmptyUnicodeString: PWideChar = '';
   PEmptyAnsiString: PAnsiChar = '';
-  EmptyRaw = {$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}nil{$ELSE}RawByteString(''){$ENDIF};
+
 var
   ZOSCodePage: Word;
 
 implementation
 
-uses ZConnProperties {$IFDEF FAST_MOVE}, ZFastCode{$ENDIF};
+{$IFDEF FAST_MOVE}
+uses ZFastCode;
+{$ENDIF}
 
 function TZCodePagedObject.GetConSettings: PZConSettings;
 begin
@@ -525,30 +478,30 @@ begin
   begin
     {$IFDEF UNICODE}
     ConSettings.CTRL_CP := DefaultSystemCodePage;
-    if Info.Values[ConnProps_ControlsCP] = 'GET_ACP' then
+    if Info.values['controls_cp'] = 'GET_ACP' then
       ConSettings.CPType := cGET_ACP
     else
       ConSettings.CPType := cCP_UTF16;
     ConSettings.AutoEncode := True;
     {$ELSE}
       {$IF defined(MSWINDOWS) or defined(FPC_HAS_BUILTIN_WIDESTR_MANAGER) or defined(WITH_LCONVENCODING)}
-      ConSettings.AutoEncode := Info.Values[ConnProps_AutoEncodeStrings] = 'True'; //compatibitity Option for existing Applications;
+      ConSettings.AutoEncode := Info.Values['AutoEncodeStrings'] = 'ON'; //compatibitity Option for existing Applications;
       {$ELSE}
       ConSettings.AutoEncode := False;
       {$IFEND}
-    if Info.Values[ConnProps_ControlsCP] = 'GET_ACP' then
+    if Info.values['controls_cp'] = 'GET_ACP' then
     begin
       ConSettings.CPType := cGET_ACP;
       ConSettings.CTRL_CP := ZOSCodePage;
     end
     else
-      if Info.Values[ConnProps_ControlsCP] = 'CP_UTF8' then
+      if Info.values['controls_cp'] = 'CP_UTF8' then
       begin
         ConSettings.CPType := cCP_UTF8;
         ConSettings.CTRL_CP := 65001;
       end
       else
-        if Info.Values[ConnProps_ControlsCP] = 'CP_UTF16' then
+        if Info.values['controls_cp'] = 'CP_UTF16' then
         begin
           {$IFDEF WITH_WIDEFIELDS}
           ConSettings.CPType := cCP_UTF16;
@@ -608,8 +561,14 @@ end;
   {$ENDIF}
 {$ENDIF}
 
-{$Q-}
-{$R-}
+{$IFOPT Q+}
+  {$DEFINE OverFlowCheckEnabled}
+  {$OVERFLOWCHECKS OFF}
+{$ENDIF}
+{$IFOPT R+}
+  {$DEFINE RangeCheckEnabled}
+  {$R-}
+{$ENDIF}
 
 function Hash(const key: ZWideString): Cardinal;
 var
@@ -713,12 +672,15 @@ begin
   end;
 end;
 
-{$IFDEF RangeCheckEnabled} {$R+} {$ENDIF}
-{$IFDEF OverFlowCheckEnabled} {$Q+} {$ENDIF}
+{$IFDEF RangeCheckEnabled}
+  {$R+}
+{$ENDIF}
+{$IFDEF OverFlowCheckEnabled}
+  {$OVERFLOWCHECKS ON}
+{$ENDIF}
 
-{$IFDEF ZAnsiProperCase}
-
-function AnsiProperCase(const S: string; const WordDelims: {$IFDEF WITH_TSYSCHARSET_DEPRECATED} String {$ELSE} TSysCharSet {$ENDIF}): string;
+{$IFNDEF FPC}
+function AnsiProperCase(const S: string; const WordDelims: TSysCharSet): string;
 var
   P,PE : PChar;
 begin
@@ -727,19 +689,11 @@ begin
   PE:=P+Length(Result);
   while (P<PE) do
     begin
-{$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-    while (P<PE) and (WordDelims.CountChar(P^) > 0) do
-{$ELSE}
     while (P<PE) and CharInSet(P^, WordDelims) do
-{$ENDIF}
       inc(P);
     if (P<PE) then
       P^:=UpCase(P^);
-{$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-    while (P<PE) and not (WordDelims.CountChar(P^) > 0) do
-{$ELSE}
     while (P<PE) and not (CharInSet(P^, WordDelims)) do
-{$ENDIF}
       inc(P);
     end;
 end;
@@ -771,7 +725,6 @@ end;
 {$UNDEF ZUTF8ToString}
 {$ENDIF}
 
-{$IFNDEF NO_ANSISTRING}
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: {$IFDEF UNICODE}AnsiString{$ELSE}String{$ENDIF});
 begin
   if ( Len = 0 ) then
@@ -792,9 +745,7 @@ begin
       SetString(Dest, Src, Len);
     {$ENDIF}
 end;
-{$ENDIF}
 
-{$IFNDEF NO_UTF8STRING}
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: UTF8String);
 begin
   if ( Len = 0 ) then
@@ -817,7 +768,6 @@ begin
       SetString(Dest, Src, Len);
       {$ENDIF}
 end;
-{$ENDIF}
 
 //EgonHugeist: my fast ByteToWord shift without encoding maps and/or alloc a ZWideString
 procedure ZSetString(Src: PAnsiChar; const Len: LengthInt; var Dest: ZWideString); overload;
@@ -830,7 +780,7 @@ begin
   else
   begin
     {$IFDEF PWIDECHAR_IS_PUNICODECHAR}
-    if (Pointer(Dest) = nil) or//empty
+    if (Pointer(Dest{%H-}) = nil) or//empty
        ({%H-}PRefCntInt(NativeUInt(Dest) - StringRefCntOffSet)^ <> 1) or { unique string ? }
        (Len <> {%H-}PLengthInt(NativeUInt(Dest) - StringLenOffSet)^) then { length as expected ? }
     {$ELSE}
@@ -861,22 +811,21 @@ begin
   end;
 end;
 
-{$IF defined(WITH_RAWBYTESTRING) or defined(WITH_TBYTES_AS_RAWBYTESTRING)}
+{$IFDEF WITH_RAWBYTESTRING}
+
 procedure ZSetString(const Src: PAnsiChar; const Len: Cardinal; var Dest: RawByteString);
 begin
   if ( Len = 0 ) then
-    Dest := EmptyRaw
+    Dest := ''
   else
-    {$IFNDEF WITH_TBYTES_AS_RAWBYTESTRING}
     if (Pointer(Dest) <> nil) and //Empty?
        ({%H-}PRefCntInt(NativeUInt(Dest) - StringRefCntOffSet)^ = 1) {refcount} and
        ({%H-}PLengthInt(NativeUInt(Dest) - StringLenOffSet)^ = LengthInt(Len)) {length} then begin
       if Src <> nil then {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Src^, Pointer(Dest)^, Len)
     end else
-    {$ENDIF}
       {$IFDEF MISS_RBS_SETSTRING_OVERLOAD}
       begin
-        Dest := EmptyRaw;
+        Dest := '';
         SetLength(Dest, Len);
         if Src <> nil then {$IFDEF FAST_MOVE}ZFastCode{$ELSE}System{$ENDIF}.Move(Src^, Pointer(Dest)^, Len);
       end;
@@ -884,7 +833,7 @@ begin
       SetString(Dest, Src, Len);
       {$ENDIF}
 end;
-{$IFEND}
+{$ENDIF}
 
 {$IFDEF MISS_MATH_NATIVEUINT_MIN_MAX_OVERLOAD}
 function Min(const A, B: NativeUInt): NativeUInt;
@@ -903,40 +852,6 @@ begin
     Result := B;
 end;
 {$ENDIF}
-
-function RawConcat(const Vals: array of RawByteString): RawByteString;
-var
-  I: Integer;
-  L: LengthInt;
-  P: PAnsiChar;
-begin
-  L := 0;
-  for I := Low(Vals) to High(Vals) do
-    if Pointer(Vals[i]) <> nil then
-      Inc(L, Length(Vals[i]){$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}-1{$ENDIF});
-  SetLength(Result, L{$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}+1{$ENDIF});
-  P := Pointer(Result);
-  AnsiChar((P+L)^) := AnsiChar(#0);
-  for I := Low(Vals) to High(Vals) do
-    if Pointer(Vals[i]) <> nil then begin
-      L := Length(Vals[i]){$IFDEF WITH_TBYTES_AS_RAWBYTESTRING}-1{$ENDIF};
-      System.Move(Pointer(Vals[i])^, P^, L);
-      Inc(P, L);
-    end;
-end;
-
-{$IFDEF ZReturnAddress} 
-function ReturnAddress: Pointer;
-{$IFDEF PUREPASCAL}
-  begin
-    Result := nil;
-  end;
-{$ELSE}
-  asm
-          MOV     EAX,[EBP+4]
-  end;
-{$ENDIF}
-{$ENDIF ZReturnAddress}
 
 initialization
   case ConSettingsDummy.CPType of

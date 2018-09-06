@@ -10,8 +10,7 @@ uses
   ZSybaseToken, ZGenericSqlAnalyser, ZGenericSqlToken, ZInterbaseAnalyser, 
   ZInterbaseToken, ZMySqlAnalyser, ZMySqlToken, ZOracleAnalyser, ZOracleToken, 
   ZPostgreSqlAnalyser, ZPostgreSqlToken, ZScriptParser, ZSelectSchema, 
-  ZSqLiteAnalyser, ZSqLiteToken, ZSybaseAnalyser, ZAdoToken, ZOleDBToken, 
-  ZODBCToken;
+  ZSqLiteAnalyser, ZSqLiteToken, ZSybaseAnalyser, ZAdoToken;
 
 implementation
 

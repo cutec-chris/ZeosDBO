@@ -56,10 +56,13 @@ interface
 {$I ZDbc.inc}
 
 uses
-  Classes, SysUtils, {$IFNDEF NO_UNIT_CONTNRS}Contnrs, {$ENDIF}
-  ZDbcIntfs, ZCollections,
-  {$IF defined(OLDFPC) or defined (NO_UNIT_CONTNRS)}ZClasses,{$IFEND}
+  Classes, SysUtils, Contnrs, ZDbcIntfs, {$IFDEF OLDFPC}ZClasses,{$ENDIF} ZCollections,
   ZGenericSqlAnalyser,
+{$IFDEF FPC}
+  {$IFDEF WIN32}
+    Comobj,
+  {$ENDIF}
+{$ENDIF}
   ZTokenizer, ZSelectSchema, ZCompatibility, ZDbcResultSet;
 
 type
@@ -157,8 +160,6 @@ type
     constructor Create(const Metadata: IZDatabaseMetadata; const SQL: string;
       ParentResultSet: TZAbstractResultSet);
     destructor Destroy; override;
-
-    function FindColumn(const ColumnName: string): Integer;
 
     function GetColumnCount: Integer; virtual;
     function IsAutoIncrement(ColumnIndex: Integer): Boolean; virtual;
@@ -259,21 +260,21 @@ destructor TZAbstractResultSetMetadata.Destroy;
 begin
   FIdentifierConvertor := nil;
   FMetadata := nil;
-  if Assigned(FTableColumns) then begin
+  if Assigned(FTableColumns) then
+  begin
     FTableColumns.Clear;
-    FreeAndNil(FTableColumns)
+    FTableColumns.Free;
   end;
+  FTableColumns := nil;
   if FColumnsLabels <> nil then
-    FreeAndNil(FColumnsLabels);
+    FColumnsLabels.Free;
   inherited Destroy;
 end;
 
 procedure TZAbstractResultSetMetadata.FillColumInfoFromGetColumnsRS(
   ColumnInfo: TZColumnInfo; const TableColumns: IZResultSet;
   const FieldName: String);
-var
-  TempColType: TZSQLType;
-  ColTypeName: string;
+var TempColType: TZSQLType;
 begin
   ColumnInfo.CatalogName := TableColumns.GetString(CatalogNameIndex);
   ColumnInfo.SchemaName := TableColumns.GetString(SchemaNameIndex);
@@ -297,7 +298,7 @@ begin
     //we've NO fixed length for a case(postgres and FB2.5up f.e.) select
     tempColType := TZSQLType(TableColumns.GetSmall(TableColColumnTypeIndex));
     if not (tempColType in [stBinaryStream, stAsciiStream,
-        stUnicodeStream, stBytes, stString, stUnicodeString]) or (ColumnInfo.ColumnType = stUnknown) then
+        stUnicodeStream, stBytes, stString, stUnicodeString]) then
       ColumnInfo.ColumnType := tempColType;
   end;
   if FConSettings = nil then //fix if on creation nil was assigned
@@ -309,15 +310,11 @@ begin
       ColumnInfo.ColumnCodePage := FConSettings^.ClientCodePage^.CP
     else
       if FConSettings^.ClientCodePage^.Encoding in [ceAnsi, ceUTf8] then //this excludes ADO which is allways 2Byte-String based
-      begin
-        ColTypeName := UpperCase(TableColumns.GetString(TableColColumnTypeNameIndex));
-        if (ColTypeName = 'NVARCHAR') or (ColTypeName = 'NCHAR') then
+        if (UpperCase(TableColumns.GetString(TableColColumnTypeNameIndex)) = 'NVARCHAR') or
+           (UpperCase(TableColumns.GetString(TableColColumnTypeNameIndex)) = 'NCHAR') then
           ColumnInfo.ColumnCodePage := zCP_UTF8
-        else if (ColTypeName = 'UNIVARCHAR') or (ColTypeName = 'UNICHAR') then
-          ColumnInfo.ColumnCodePage := zCP_UTF16
         else
           ColumnInfo.ColumnCodePage := FConSettings^.ClientCodePage^.CP //assume locale codepage
-      end
   else
     ColumnInfo.ColumnCodePage := zCP_NONE; //not a character column
   {nullable}
@@ -361,39 +358,6 @@ begin
   {default value}
   if not TableColumns.IsNull(TableColColumnColDefIndex) then
     ColumnInfo.DefaultValue := TableColumns.GetString(TableColColumnColDefIndex);
-end;
-
-{**
-  Maps the given <code>Metadata</code> column name to its
-  <code>Metadata</code> column index.
-  First searches with case-sensivity then without
-
-  @param columnName the name of the column
-  @return the column index of the given column name
-}
-function TZAbstractResultSetMetadata.FindColumn(const ColumnName: string): Integer;
-var
-  I: Integer;
-  ColumnNameUpper: string;
-begin
-  { Search for case sensitive columns. }
-  for I := FirstDbcIndex to GetColumnCount{$IFDEF GENERIC_INDEX}-1{$ENDIF} do
-    if GetColumnLabel(I) = ColumnName then
-    begin
-      Result := I;
-      Exit;
-    end;
-
-  { Search for case insensitive columns. }
-  ColumnNameUpper := AnsiUpperCase(ColumnName);
-  for I := FirstDbcIndex to GetColumnCount{$IFDEF GENERIC_INDEX}-1{$ENDIF} do
-    if AnsiUpperCase(GetColumnLabel(I)) = ColumnNameUpper then
-    begin
-      Result := I;
-      Exit;
-    end;
-
-  Result := InvalidDbcIndex;
 end;
 
 {**

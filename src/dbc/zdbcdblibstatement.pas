@@ -105,7 +105,7 @@ type
     //procedure FetchRowCount; virtual;
 
   protected
-    procedure SetInParamCount(NewParamCount: Integer); override;
+    procedure SetInParamCount(const NewParamCount: Integer); override;
   public
     constructor Create(const Connection: IZConnection; const ProcName: string; Info: TStrings);
     procedure Close; override;
@@ -124,7 +124,7 @@ implementation
 uses
   Types, Math,
   ZDbcLogging, ZDbcCachedResultSet, ZDbcDbLibUtils, ZDbcDbLibResultSet,
-  ZVariant, ZDbcUtils, ZEncoding, ZDbcResultSet, ZDbcProperties
+  ZVariant, ZDbcUtils, ZEncoding, ZDbcResultSet
   {$IFDEF WITH_UNITANSISTRINGS}, AnsiStrings{$ENDIF}
   {$IFDEF FAST_MOVE}, ZFastCode{$ENDIF}, ZMessages;
 
@@ -152,7 +152,7 @@ begin
     So this is stopping all encoding detections and increases the performance in
     a high rate. If Varchar fields are fetched you Should use a cast to N-Fields!
     Else all results are invalid!!!!! Just to invoke later questions!}
-  if DefineStatementParameter(Self, DSProps_ResetCodePage, '') = 'UTF8' then
+  if DefineStatementParameter(Self, 'ResetCodePage', '') = 'UTF8' then
     FUserEncoding := ceUTF8
   else
     Self.FUserEncoding := ceDefault;
@@ -426,7 +426,7 @@ begin
     So this is stopping all encoding detections and increases the performance in
     a high rate. If Varchar fields are fetched you Should use a cast to N-Fields!
     Else all results are invalid!!!!! Just to invoke later questions!}
-  if DefineStatementParameter(Self, DSProps_ResetCodePage, '') = 'UTF8' then
+  if DefineStatementParameter(Self, 'ResetCodePage', '') = 'UTF8' then
     FUserEncoding := ceUTF8
   else
     Self.FUserEncoding := ceDefault;
@@ -651,12 +651,13 @@ begin
           if IsNCharIndex[i] then
           begin
             Params[I].CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], zCP_UTF8);
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsVarchar),
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsChar),
               -1, Max(1, Params[I].CharRec.Len), Params[I].CharRec.P);
-          end else
+          end
+          else
           begin
             Params[I].CharRec := ClientVarManager.GetAsCharRec(InParamValues[I], ConSettings^.ClientCodePage^.CP);
-            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsVarchar),
+            FPlainDriver.dbRpcParam(FHandle, nil, RetParam, Ord(tdsChar),
               -1, Max(1, Params[I].CharRec.Len), Params[I].CharRec.P);
           end;
         stDate:
@@ -895,7 +896,7 @@ begin
   DriverManager.LogMessage(lcExecute, ConSettings^.Protocol, 'EXEC '+ ASQL);
 end;
 
-procedure TZDBLibCallableStatement.SetInParamCount(NewParamCount: Integer);
+procedure TZDBLibCallableStatement.SetInParamCount(const NewParamCount: Integer);
 begin
   inherited SetInParamCount(NewParamCount);
 

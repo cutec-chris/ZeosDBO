@@ -85,7 +85,6 @@ type
   private
     FParams: TParams;
     FScript: TZSQLStrings;
-
     FScriptParser: TZSQLScriptParser;
     FConnection: TZAbstractConnection;
     FBeforeExecute: TZProcessorNotifyEvent;
@@ -109,7 +108,7 @@ type
     procedure SetParamCheck(Value: Boolean);
     function GetParamChar: Char;
     procedure SetParamChar(Value: Char);
-    procedure UpdateSQLStrings({%H-}Sender: TObject);
+    procedure UpdateSQLStrings(Sender: TObject);
   protected
     procedure CheckConnected;
     function DoOnError(StatementIndex: Integer; E: Exception):
@@ -119,7 +118,7 @@ type
 
     function CreateStatement(const SQL: string; Properties: TStrings):
       IZPreparedStatement; virtual;
-    procedure SetStatementParams(const Statement: IZPreparedStatement;
+    procedure SetStatementParams(Statement: IZPreparedStatement;
       const ParamNames: TStringDynArray; Params: TParams); virtual;
   public
     constructor Create(AOwner: TComponent); override;
@@ -394,7 +393,6 @@ begin
                 FParams);
               Statement.ExecuteUpdatePrepared;
             end;
-          Statement.Close; //see test Test1049821: if LastResultSet is assigned
           Statement := nil;
         except
           on E: Exception do
@@ -469,7 +467,7 @@ end;
   @param ParamNames an array of parameter names.
   @param Params a collection of SQL parameters.
 }
-procedure TZSQLProcessor.SetStatementParams(const Statement: IZPreparedStatement;
+procedure TZSQLProcessor.SetStatementParams(Statement: IZPreparedStatement;
   const ParamNames: TStringDynArray; Params: TParams);
 var
   I: Integer;

@@ -135,7 +135,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Fin d''expression imprévue';
   cSRightBraceExpected = ') attendue';
   cSParametersError = '%d paramètres attendus mais %d ont été trouvés';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Plus de deux paramètres sont attendus';
   cSInvalidVarByteArray = 'Tableau de VarByte non valide';
   cSVariableAlreadyExists = 'La variable "%s" existe déjà';
@@ -303,7 +302,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Final inesperado de expressão';
   cSRightBraceExpected = ') esperado';
   cSParametersError = 'Esperado %d parâmetros mas foi encontrado %d';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Esperado mais que 2 parâmetros';
   cSInvalidVarByteArray = 'VarByte array inválido';
   cSVariableAlreadyExists = 'Variável "%s" já existe';
@@ -468,7 +466,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Onverwacht einde van de expressie';
   cSRightBraceExpected = ') verwacht';
   cSParametersError = 'Verwacht worden %d parameters maar er zijn er %d gevonden';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Meer dan 2 parameters werden verwacht';
   cSInvalidVarByteArray = 'Ongeldig VarByte array';
   cSVariableAlreadyExists = 'Variabele "%s" bestaat al';
@@ -636,7 +633,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Unerwartetes Ende des Ausdrucks';
   cSRightBraceExpected = ') erwartet';
   cSParametersError = 'Es werden %d Parameter erwartet, aber nur %d Parameter gefunden';
-  cSParamValueExceeded = 'Daten des Parameters %d zu groß.';
   cSExpectedMoreParams = 'Es werden mehr als zwei Parameter erwartet';
   cSInvalidVarByteArray = 'Ungültiges VarByte Array';
   cSVariableAlreadyExists = 'Die Variable "%s" existiert bereits';
@@ -802,7 +798,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Fin de expresión inesperado';
   cSRightBraceExpected = ') esperado';
   cSParametersError = 'Se esperaban %d parámetros pero solo %d fueron encontrados';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Se esperaban más de dos parámetros';
   cSInvalidVarByteArray = 'Arreglo VarByte inválido';
   cSVariableAlreadyExists = 'La variable "%s" ya existe';
@@ -970,7 +965,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Final neaºteptat pentru expresie';
   cSRightBraceExpected = ') aºteptat';
   cSParametersError = 'parametrul %d a fost aºteptat dar %d a fost gãsit';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Mai nult de doi parametrii sunt aºteptaşi';
   cSInvalidVarByteArray = 'Arie VarByte invalidã';
   cSVariableAlreadyExists = 'Variabila "%s" deja existã';
@@ -1134,7 +1128,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Tidak dibutuhkan, akhir dari ekspresi';
   cSRightBraceExpected = ') dibutuhkan';
   cSParametersError = '%d parameter dibutuhkan tapi terdapat %d parameter';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Dibutuhkan lebih dari dua parameter';
   cSInvalidVarByteArray = 'array VarByte tidak valid';
   cSVariableAlreadyExists = 'Variabel "%s" sudah ada';
@@ -1301,7 +1294,6 @@ resourcestring
   cSUnexpectedExprEnd                       = 'Íåîæèäàííûé êîíåö âûğàæåíèÿ';
   cSRightBraceExpected                      = ') ïğîïóùåíà';
   cSParametersError                         = 'îæèäàåòñÿ %d ïàğàìåòğîâ, íàéäåíî %d';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams                      = 'Îæèäàåòñÿ áîëåå 2-õ ïàğàìåòğîâ';
   cSInvalidVarByteArray                     = 'Íåâåğíûé ìàññèâ (VarByte)';
   cSVariableAlreadyExists                   = 'Çíà÷åíèå "%s" óæå ñóùåñòâóåò';
@@ -1469,7 +1461,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Neoèekávanı konec vırazu';
   cSRightBraceExpected = ') oèekáván(o/a/y)';
   cSParametersError = '%d parametrù oèekáváno, ale %d existuje';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Je oèekáváno více, ne 2 parametry';
   cSInvalidVarByteArray = 'Nesprávnı VarByte array';
   cSVariableAlreadyExists = 'Promìná "%s" ji existuje';
@@ -1639,7 +1630,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Nieoczekiwany koniec wyra¿enia';
   cSRightBraceExpected = 'Oczekiwano znaku )';
   cSParametersError = 'Oczekiwana iloœæ parametrów: %d, znaleziono: %d';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'Oczekiwano wiêcej ni¿ dwa parametry';
   cSInvalidVarByteArray = 'B³êdna tablica VarByte';
   cSVariableAlreadyExists = 'Zmienna "%s" ju¿ istnieje';
@@ -1806,7 +1796,6 @@ resourcestring
   cSUnexpectedExprEnd = 'Unexpected end of expression';
   cSRightBraceExpected = ') expected';
   cSParametersError = '%d parameters were expected but %d were found';
-  cSParamValueExceeded = 'value of param %d exceeded';
   cSExpectedMoreParams = 'More than two parameters are expected';
   cSInvalidVarByteArray = 'Invalid VarByte array';
   cSVariableAlreadyExists = 'Variable "%s" already exists';
@@ -1994,7 +1983,6 @@ var
   SUnexpectedExprEnd: String;
   SRightBraceExpected: String;
   SParametersError: String;
-  SParamValueExceeded: String;
   SExpectedMoreParams: String;
   SInvalidVarByteArray: String;
   SVariableAlreadyExists: String;
@@ -2165,8 +2153,6 @@ begin
   SUnexpectedExprEnd := cSUnexpectedExprEnd;
   SRightBraceExpected := cSRightBraceExpected;
   SParametersError := cSParametersError;
-  SParamValueExceeded := cSParamValueExceeded;
-
   SExpectedMoreParams := cSExpectedMoreParams;
   SInvalidVarByteArray := cSInvalidVarByteArray;
   SVariableAlreadyExists := cSVariableAlreadyExists;

@@ -17,8 +17,8 @@
       </Parsing>
     </CompilerOptions>
     <Description Value="Zeos Core Classes and Interfaces"/>
-    <Version Major="7" Minor="3"/>
-    <Files Count="17">
+    <Version Major="7" Minor="2"/>
+    <Files Count="16">
       <Item1>
         <Filename Value="../../src/core/ZClasses.pas"/>
         <UnitName Value="ZClasses"/>
@@ -83,10 +83,6 @@
         <Filename Value="../../src/core/ZFastCode.pas"/>
         <UnitName Value="ZFastCode"/>
       </Item16>
-      <Item17>
-        <Filename Value="../../src/core/ZConnProperties.pas"/>
-        <UnitName Value="ZConnProperties"/>
-      </Item17>
     </Files>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>

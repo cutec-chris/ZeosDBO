@@ -66,7 +66,6 @@ type
     FSQL: string;
     FParamIndices: TIntegerDynArray;
     FParams: TStrings;
-    FParamNamesArray: TStringDynArray;
 
     function GetParamCount: Integer;
     function GetParamName(Index: Integer): string;
@@ -78,7 +77,7 @@ type
     property ParamCount: Integer read GetParamCount;
     property ParamNames[Index: Integer]: string read GetParamName;
     property ParamIndices: TIntegerDynArray read FParamIndices;
-    property ParamNamesArray: TStringDynArray read FParamNamesArray;
+    property ParamNamesArray: TStringDynArray read GetParamNamesArray;
   end;
 
   {** Imlements a string list with SQL statements. }
@@ -141,7 +140,6 @@ begin
   FSQL := SQL;
   FParamIndices := ParamIndices;
   FParams := Params;
-  FParamNamesArray := GetParamNamesArray;
 end;
 
 {**
@@ -345,19 +343,21 @@ end;
 }
 procedure TZSQLStrings.RebuildAll;
 var
-  Tokens: TZTokenList;
-  Token: PZToken;
-  StartTokenIndex,
+  Tokens: TStrings;
+  TokenValue: string;
+  TokenType: TZTokenType;
   TokenIndex: Integer;
   ParamIndex: Integer;
   ParamIndices: TIntegerDynArray;
   ParamIndexCount: Integer;
-  ParamName, SQL, S: string;
+  ParamName, SQL: string;
   Tokenizer: IZTokenizer;
 
   procedure NextToken;
   begin
-    Token := Tokens[TokenIndex];
+    TokenType := TZTokenType({$IFDEF FPC}Pointer({$ENDIF}
+      Tokens.Objects[TokenIndex]{$IFDEF FPC}){$ENDIF});
+    TokenValue := Tokens[TokenIndex];
     Inc(TokenIndex);
   end;
 
@@ -369,45 +369,40 @@ begin
   SQL := '';
   ParamIndexCount := 0;
   SetLength(ParamIndices, ParamIndexCount);
-
+  
   { Optimization for empty query. }
   If Length(Trim(Text)) = 0 then
     Exit;
-  S := Text;
+
   { Optimization for single query without parameters. }
-  if (not FParamCheck or (Pos(FParamChar, S) = 0))
-    and (not FMultiStatements or (Pos(';', S) = 0)) then
+  if (not FParamCheck or (Pos(FParamChar, Text) = 0))
+    and (not FMultiStatements or (Pos(';', Text) = 0)) then
   begin
-    FStatements.Add(TZSQLStatement.Create(S, ParamIndices, FParams));
+    FStatements.Add(TZSQLStatement.Create(Text, ParamIndices, FParams));
     Exit;
   end;
 
   Tokenizer := GetTokenizer;
-  Tokens := Tokenizer.TokenizeBufferToList(S, [toSkipComments, toUnifyWhitespaces]);
+  Tokens := Tokenizer.TokenizeBufferToList(Text, [toSkipComments, toUnifyWhitespaces]);
   try
     TokenIndex := 0;
-    StartTokenIndex := 0;
     repeat
       NextToken;
       { Processes parameters. }
-      if ParamCheck and (Token.P^ = FParamChar) and (Token.L = 1) then begin
+      if ParamCheck and (TokenValue = FParamChar) then
+      begin
         NextToken;
-        if (Token.TokenType <> ttEOF) and not ((Token.P^ = FParamChar) and (Token.L = 1)) then begin
+        if (TokenType <> ttEOF) and (TokenValue <> FParamChar) then
+        begin
           { Check for correct parameter type. }
-          if not (Token.TokenType in [ttWord, ttQuoted, ttQuotedIdentifier, ttKeyWord]) then
-            raise EZDatabaseError.Create(SIncorrectToken)
-          else begin
-            Dec(TokenIndex);
-            Tokens.Delete(TokenIndex-1);
-            Token := Tokens[TokenIndex-1];
-          end;
+          if not (TokenType in [ttWord, ttQuoted, ttQuotedIdentifier, ttKeyWord]) then
+            raise EZDatabaseError.Create(SIncorrectToken);
 
-          if (Token.L >= 2) and CharInSet(Token.P^, [#39, '`', '"', '['])
-          then ParamName := Tokenizer.GetQuoteState.DecodeToken(Token^, Token.P^)
-          else ParamName := TokenAsString(Token^);
+          SQL := SQL + '?';
 
-          Token.P := pQuestionMark;
-          Token.L := 1;
+          ParamName := TokenValue;
+          if (ParamName <> '') and CharInSet(ParamName[1], [#39, '`', '"', '[']) then
+            ParamName := Tokenizer.GetQuoteState.DecodeString(ParamName, ParamName[1]);
 
           ParamIndex := FindParam(ParamName);
           if ParamIndex < 0 then
@@ -422,19 +417,21 @@ begin
       end;
 
       { Adds a DML statement. }
-      if (Token.TokenType = ttEOF) or (FMultiStatements and ((Token.P^ = ';') and (Token.L = 1))) then
+      if (TokenType = ttEOF) or (FMultiStatements and (TokenValue = ';')) then
       begin
-        SQL := Trim(Tokens.AsString(StartTokenIndex, TokenIndex-2));
+        SQL := Trim(SQL);
         if SQL <> '' then
           FStatements.Add(TZSQLStatement.Create(SQL, ParamIndices, FParams));
+
         SQL := '';
-        StartTokenIndex := TokenIndex +1;
         ParamIndexCount := 0;
         SetLength(ParamIndices, ParamIndexCount);
-      end;
-    until Token.TokenType = ttEOF;
+      end
+      { Adds a default token. }
+      else
+        SQL := SQL + TokenValue;
+    until TokenType = ttEOF;
   finally
-    S := ''; //hooking compiler optimisation
     Tokens.Free;
   end;
 end;

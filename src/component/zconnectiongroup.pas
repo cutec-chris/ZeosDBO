@@ -76,6 +76,7 @@ type
     property Sender: TObject read FSender write FSender;
   end;
 
+{$HINTS OFF}
   TZConnectionGroup = class(TComponent)
   private
     FOnChange: TNotifyEvent;
@@ -128,6 +129,7 @@ type
     // -- todo ----
     // add another property or event ?
   end;
+{$HINTS ON}
 
 implementation
 

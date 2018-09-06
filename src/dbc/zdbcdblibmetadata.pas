@@ -402,7 +402,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresLowerCaseIdentifiers: Boolean;
 begin
-  Result := false;
+  Result := fCaseIdentifiers <> icSpecial;
 end;
 
 {**
@@ -412,7 +412,7 @@ end;
 }
 function TZDbLibDatabaseInfo.StoresMixedCaseIdentifiers: Boolean;
 begin
-  Result := fCaseIdentifiers in [icMixed, icSpecial];
+  Result := fCaseIdentifiers = icSpecial;
 end;
 
 {**
@@ -1219,11 +1219,11 @@ begin
 end;
 
 {**
-  Composes a object name, SQLQuotedStror NullText
+  Composes a object name, AnsiQuotedStr or NullText
   @param S the object string
   @param NullText the "NULL"-Text default: 'null'
   @param QuoteChar the QuoteChar default: '
-  @return 'null' if S is '' or S if s is already Quoted or SQLQuotedStr(S, #39)
+  @return 'null' if S is '' or S if s is already Quoted or AnsiQuotedStr(S, #39)
 }
 function TZDbLibBaseDatabaseMetadata.ComposeObjectString(const S: String;
   Const NullText: String = 'null'; QuoteChar: Char = #39): String;
@@ -1233,21 +1233,21 @@ begin
   else begin
     Result := ConvertEscapes(S);
     if not IC.IsQuoted(Result) then
-      Result := SQLQuotedStr(Result, QuoteChar);
+      Result := AnsiQuotedStr(Result, QuoteChar);
   end;
 end;
 
 {**
-  Decomposes a object name, SQLQuotedStr or NullText
+  Decomposes a object name, AnsiQuotedStr or NullText
   @param S the object string
-  @return 'null' if S is '' or S if s is already Quoted or SQLQuotedStr(S, #39)
+  @return 'null' if S is '' or S if s is already Quoted or AnsiQuotedStr(S, #39)
 }
 function TZDbLibBaseDatabaseMetadata.DecomposeObjectString(const S: String): String;
 begin
   if S = '' then
     Result := 'null'
   else
-    Result := SQLQuotedStr(Inherited DecomposeObjectString(S), #39);
+    Result := AnsiQuotedStr(Inherited DecomposeObjectString(S), #39);
 end;
 
 function TZDbLibBaseDatabaseMetadata.ConvertEscapes(const Pattern: String): String;
@@ -1623,10 +1623,14 @@ begin
 
     TableTypes := '';
     for I := 0 to Length(Types) - 1 do
-      AppendSepString(TableTypes, SQLQuotedStr(Types[I], ''''), ',');
+    begin
+      if Length(TableTypes) > 0 then
+        TableTypes := TableTypes + ',';
+      TableTypes := TableTypes + AnsiQuotedStr(Types[I], '''');
+    end;
     if TableTypes = '' then
       TableTypes := 'null'
-    else TableTypes := SQLQuotedStr(TableTypes, '"');
+    else TableTypes := AnsiQuotedStr(TableTypes, '"');
 
     with GetStatement.ExecuteQuery(
       Format('exec sp_tables %s, %s, %s, %s',
@@ -2666,7 +2670,7 @@ begin
   with GetStatement.ExecuteQuery(
     Format('select c.* from syscolumns c inner join sysobjects o on'
     + ' (o.id = c.id) where o.name = %s and c.number = %s order by colid',
-    [SQLQuotedStr(ProcNamePart, ''''), NumberPart])) do
+    [AnsiQuotedStr(ProcNamePart, ''''), NumberPart])) do
   begin
     Result.Next;//Skip return parameter
     while Next do
@@ -2733,7 +2737,11 @@ begin
 
   TableTypes := '';
   for I := 0 to Length(Types) - 1 do
-    AppendSepString(TableTypes, SQLQuotedStr(Types[I], ''''), ',');
+  begin
+    if TableTypes <> '' then
+      TableTypes := TableTypes + ',';
+    TableTypes := TableTypes + AnsiQuotedStr(Types[I], '''');
+  end;
 
   StatementResult := GetStatement.ExecuteQuery(Format('exec sp_jdbc_tables %s, %s, %s, %s',
     [ComposeObjectString(TableNamePattern), ComposeObjectString(SchemaPattern), ComposeObjectString(Catalog), ComposeObjectString(TableTypes)]));
@@ -2915,8 +2923,8 @@ begin
       Result.UpdateString(TableNameIndex, GetStringByName('TABLE_NAME'));
       Result.UpdateString(ColumnNameIndex, GetStringByName('COLUMN_NAME'));
 //The value in the resultset will be used
-      Result.UpdateSmall(TableColColumnTypeIndex,
-        Ord(ConvertODBCToSqlType(GetSmallByName('DATA_TYPE'), ConSettings.CPType)));
+//      Result.UpdateSmall(TableColColumnTypeIndex,
+//        Ord(ConvertODBCToSqlType(GetSmallByName('DATA_TYPE'))));
       Result.UpdateString(TableColColumnTypeNameIndex, GetStringByName('TYPE_NAME'));
       Result.UpdateInt(TableColColumnSizeIndex, GetIntByName('COLUMN_SIZE'));
       Result.UpdateInt(TableColColumnBufLengthIndex, GetIntByName('BUFFER_LENGTH'));
@@ -3652,8 +3660,8 @@ var
 begin
   Result:=inherited UncachedGetIndexInfo(Catalog, Schema, Table, Unique, Approximate);
 
-  Is_Unique := SQLQuotedStr(BoolStrInts[Unique], '''');
-  Accuracy := SQLQuotedStr(BoolStrInts[Approximate], '''');
+  Is_Unique := AnsiQuotedStr(BoolStrInts[Unique], '''');
+  Accuracy := AnsiQuotedStr(BoolStrInts[Approximate], '''');
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getindexinfo %s, %s, %s, %s, %s',
@@ -3727,7 +3735,11 @@ begin
 
   UDTypes := '';
   for I := 0 to Length(Types) - 1 do
-    AppendSepString(UDTypes, SQLQuotedStr(ZFastCode.IntToStr(Types[I]), ''''), ',');
+  begin
+    if Length(UDTypes) > 0 then
+      UDTypes := UDTypes + ',';
+    UDTypes := UDTypes + AnsiQuotedStr(ZFastCode.IntToStr(Types[I]), '''');
+  end;
 
   with GetStatement.ExecuteQuery(
     Format('exec sp_jdbc_getudts %s, %s, %s, %s',

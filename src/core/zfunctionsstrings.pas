@@ -163,37 +163,26 @@ Function Capitalize(const s: string; const Delims : string = '') : string;
 Function LevenshteinDistance(const s1, s2: string; const DoUpcase : BOOLEAN = TRUE): Integer;
 procedure AddStringFunctions(Functions : TZFunctionsList);
 
+{$IFNDEF FPC}
+{$ENDIF}
+
 implementation
 
 uses
   Math, StrUtils, ZMessages, ZCompatibility, ZFastCode;
 
-{$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-var
-  sStdWordDelims: String;
-{$ENDIF}
-
 Function Capitalize(const s: string; const Delims : string = '') : string;
 var
-  {$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-  sDelims : String;
-  {$ELSE}
-  sDelims : TSysCharSet;
+  sDelims : set of ansichar;
   i : integer;
-  P: PChar;
-  {$ENDIF}
 begin
   if Delims = '' then
-    sDelims := {$IFDEF WITH_TSYSCHARSET_DEPRECATED}sStdWordDelims{$ELSE}StdWordDelims{$ENDIF}
-  else begin
-    {$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-    sDelims := Delims;
-    {$ELSE}
+    sDelims := StdWordDelims
+  else
+  begin
     sDelims := [];
-    P := Pointer(Delims);
-    for i:=0 to Length(Delims)-1 do
-      Include(sDelims,AnsiChar((P+i)^))
-    {$ENDIF}
+    for i:=1 to Length(Delims) do
+      Include(sDelims,AnsiChar(Delims[i]))
   end;
   Result := AnsiProperCase(s, sDelims);
 end;
@@ -582,33 +571,6 @@ begin
   Functions.Add(TZLevenshteinDistanceFunction.Create('LEVDIST'));
   Functions.Add(TZLevenshteinDistanceFunction.Create('LEVENSHTEINDISTANCE'));
 end;
-
-{$IFDEF WITH_TSYSCHARSET_DEPRECATED}
-
-{$WARNINGS OFF}
-procedure sStdWordDelimsFiller;
-var C: Char;
-  P: PChar;
-  I: Integer;
-begin
-  I := 0;
-  for C := #0 to Char(High(Byte)) do
-    Inc(I, Ord(C in StdWordDelims));
-  SetLength(sStdWordDelims, I);
-  P := Pointer(sStdWordDelims);
-  for C := #0 to Char(High(Byte)) do
-    if C in StdWordDelims then begin
-      P^ := C;
-      Inc(P);
-    end;
-end;
-{$WARNINGS ON}
-
-initialization
-
-sStdWordDelimsFiller;
-
-{$ENDIF}
 
 end.
 

@@ -55,8 +55,7 @@ interface
 
 {$I ZCore.inc}
 
-uses SysUtils, Classes, {$IFDEF NO_UNIT_CONTNRS}ZClasses{$ELSE}Contnrs{$ENDIF},
-  ZCompatibility, ZVariant, ZExpression;
+uses SysUtils, Classes, Contnrs, ZCompatibility, ZVariant, ZExpression;
 
 type
   {** Implements a variable holder object. }

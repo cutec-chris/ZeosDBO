@@ -54,6 +54,7 @@ unit ZPlainAdoDriver;
 interface
 
 {$I ZPlain.inc}
+{$IFDEF ENABLE_ADO}
 
 uses {$IFDEF OLDFPC}ZClasses,{$ENDIF} ZPlainDriver;
 
@@ -71,7 +72,9 @@ type
     function Clone: IZPlainDriver; override;
   end;
 
+{$ENDIF ENABLE_ADO}
 implementation
+{$IFDEF ENABLE_ADO}
 
 uses ZCompatibility, ZEncoding, Windows;
 
@@ -109,4 +112,6 @@ begin
   Result := Self;
 end;
 
+{$ENDIF ENABLE_ADO}
 end.
+

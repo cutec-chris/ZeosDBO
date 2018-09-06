@@ -56,21 +56,25 @@ interface
 {$I ZParseSql.inc}
 
 uses
-  Classes, ZTokenizer, ZGenericSqlToken;
+  Classes, ZTokenizer, ZGenericSqlToken, ZPostgreSqlToken,
+  ZSybaseToken;
 
 type
 
   {** Implements a Oracle-specific number state object. }
-  TZOracleNumberState = TZGenericSQLNoHexNumberState;
+  TZOracleNumberState = class (TZPostgreSQLNumberState)
+  end;
 
   {** Implements a Oracle-specific quote string state object. }
-  TZOracleQuoteState = TZGenericSQLQuoteState;
+  TZOracleQuoteState = class (TZGenericSQLQuoteState)
+  end;
 
   {**
     This state will either delegate to a comment-handling
     state, or return a token with just a slash in it.
   }
-  TZOracleCommentState = TZGenericSQLCommentState;
+  TZOracleCommentState = class (TZSybaseCommentState)
+  end;
 
   {** Implements a symbol state object. }
   TZOracleSymbolState = class (TZSymbolState)
