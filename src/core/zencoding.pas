@@ -176,8 +176,8 @@ function PRawToUnicode(Source: PAnsiChar; const SourceBytes: LengthInt; CP: Word
 procedure PRaw2PUnicode(Source: PAnsiChar; Dest: PWideChar; SourceBytes, BufCodePoints: LengthInt; CP: Word); overload; //{$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
 function PRaw2PUnicodeBuf(Source: PAnsiChar; Dest: Pointer; SourceBytes: LengthInt; CP: Word): LengthInt; overload; //{$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
 function PRaw2PUnicodeBuf(Source: PAnsiChar; SourceBytes, BufCodePoints: LengthInt; var Dest: Pointer; CP: Word): LengthInt; overload; //{$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
-function ZUnicodeToRaw(const US: ZWideString; CP: Word): RawByteString; {$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
-function PUnicodeToRaw(Source: PWideChar; SrcCodePoints: LengthInt; CP: Word): RawByteString; {$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
+function ZUnicodeToRaw(const US: ZWideString; CP: Word): UTF8String; {$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
+function PUnicodeToRaw(Source: PWideChar; SrcCodePoints: LengthInt; CP: Word): UTF8String; {$IF defined(WITH_INLINE) and not defined(WITH_LCONVENCODING)}inline; {$IFEND}
 function PUnicode2PRawBuf(Source: PWideChar; Dest: PAnsiChar; SrcCodePoints, MaxDestBytes: LengthInt; CP: Word): LengthInt; overload;
 function PUnicodeToString(Source: PWideChar; SrcCodePoints: LengthInt; CP: Word): String;
 function ZUnicodeToString(const Source: ZWideString; CP: Word): String;
@@ -1968,7 +1968,7 @@ begin
   end;
 end;
 
-function ZUnicodeToRaw(const US: ZWideString; CP: Word): RawByteString;
+function ZUnicodeToRaw(const US: ZWideString; CP: Word): UTF8String;
 {$IFDEF WITH_LCONVENCODING}
 begin
   case CP of
@@ -2027,7 +2027,8 @@ begin
 end;
 {$ENDIF}
 
-function PUnicodeToRaw(Source: PWideChar; SrcCodePoints: LengthInt; CP: Word): RawByteString;
+function PUnicodeToRaw(Source: PWideChar; SrcCodePoints: LengthInt; CP: Word
+  ): UTF8String;
 var
   ulen: Integer;
   Buf: Array[0..dsMaxRStringSize] of AnsiChar;
@@ -2046,7 +2047,8 @@ begin
       {$IFDEF WITH_UNICODEFROMLOCALECHARS}
       ZSetString(@Buf[0], LocaleCharsFromUnicode(CP, 0, Source, SrcCodePoints, @Buf[0], ulen, NIL, NIL), Result)
       {$ELSE}
-      ZSetString(@Buf[0], WideCharToMultiByte(CP, 0, Source, SrcCodePoints, @Buf[0], ulen, NIL, NIL), Result)
+      //ZSetString(@Buf[0], WideCharToMultiByte(CP, 0, Source, SrcCodePoints, @Buf[0], ulen, NIL, NIL), Result)
+      Result := Source
       {$ENDIF}
     else begin
       ZSetString(nil, ULen, Result); //oversized
@@ -2621,7 +2623,8 @@ begin
   end;
 end;
 
-function ZConvertUTF8ToRaw(Const Src: UTF8String; const CP: Word): RawByteString;
+function ZConvertUTF8ToRaw(const Src: UTF8String; const CP: Word
+  ): RawByteString;
 var
   US: ZWideString; //COM based. So localize the String to avoid Buffer overrun
 begin
@@ -3084,7 +3087,7 @@ begin
   {$ENDIF}
 end;
 
-function ZMoveUTF8ToRaw(Const Src: UTF8String; const CP: Word): RawByteString;
+function ZMoveUTF8ToRaw(const Src: UTF8String; const CP: Word): RawByteString;
 begin
   {$IFDEF WITH_RAWBYTESTRING_CONVERSION_BUG}
   ZSetString(Pointer(Src), Length(Src), Result{%H-});
@@ -3093,7 +3096,7 @@ begin
   {$ENDIF}
 end;
 
-function ZMoveStringToAnsi(Const Src: String; const StringCP: Word): AnsiString;
+function ZMoveStringToAnsi(const Src: String; const StringCP: Word): AnsiString;
 begin
   {$IFDEF UNICODE}
   Result := AnsiString(Src);
@@ -3568,7 +3571,8 @@ begin
   Result := ZUnicodeToRaw(AMessage, RawCP);
 end;
 {$ELSE !UNICODE}
-function ConvertZMsgToRaw(const AMessage: String; {$IFNDEF LCL}Const{$ENDIF}MsgCP, RawCP: Word): RawByteString;
+function ConvertZMsgToRaw(const AMessage: String; const MsgCP, RawCP: Word
+  ): RawByteString;
 begin
   {$IFDEF LCL}
   RawCP := zCP_UTF8;
@@ -3587,7 +3591,8 @@ begin
       {%H-}PLengthInt(NativeUInt(AMessage) - StringLenOffSet)^, MsgCP), RawCP);
 end;
 
-function ConvertEMsgToRaw(const AMessage: String; {$IFNDEF LCL}Const{$ENDIF}RawCP: Word): RawByteString;
+function ConvertEMsgToRaw(const AMessage: String; const RawCP: Word
+  ): RawByteString;
 begin
   {$IFDEF LCL}
   RawCP := zCP_UTF8;
