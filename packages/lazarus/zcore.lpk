@@ -84,6 +84,11 @@
         <UnitName Value="ZFastCode"/>
       </Item16>
     </Files>
+    <RequiredPkgs Count="1">
+      <Item1>
+        <PackageName Value="LazUtils"/>
+      </Item1>
+    </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>
     </UsageOptions>

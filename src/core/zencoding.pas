@@ -61,6 +61,7 @@ uses
   {$MACRO ON}
    LCLVersion, LConvEncoding,
   {$ENDIF}
+  LazUTF8,
   {$IFDEF MSWINDOWS}
   Windows,
   {$ENDIF}
@@ -2047,8 +2048,12 @@ begin
       {$IFDEF WITH_UNICODEFROMLOCALECHARS}
       ZSetString(@Buf[0], LocaleCharsFromUnicode(CP, 0, Source, SrcCodePoints, @Buf[0], ulen, NIL, NIL), Result)
       {$ELSE}
-      //ZSetString(@Buf[0], WideCharToMultiByte(CP, 0, Source, SrcCodePoints, @Buf[0], ulen, NIL, NIL), Result)
+      {$if FPC_FULLVERSION>30000}
       Result := Source
+      {$else}
+      Result := WinCPToUTF8(Source) //works partiall in fpc 2.6.4
+      Dont use this un FPC < 3.0.0
+      {$endif}
       {$ENDIF}
     else begin
       ZSetString(nil, ULen, Result); //oversized
