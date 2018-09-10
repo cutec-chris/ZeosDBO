@@ -7,7 +7,7 @@
       <Version Value="11"/>
       <SearchPaths>
         <OtherUnitFiles Value="../../src/parsesql"/>
-        <UnitOutputDirectory Value="lib/$(TargetCPU)-$(TargetOS)-$(LCLWidgetType)"/>
+        <UnitOutputDirectory Value="lib/zparsesql/$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
       <Parsing>
         <SyntaxOptions>
@@ -17,8 +17,8 @@
       </Parsing>
     </CompilerOptions>
     <Description Value="Zeos SQL Parsing Classes and Interfaces"/>
-    <Version Major="7" Minor="1"/>
-    <Files Count="16">
+    <Version Major="7" Minor="2"/>
+    <Files Count="17">
       <Item1>
         <Filename Value="../../src/parsesql/ZSybaseToken.pas"/>
         <UnitName Value="ZSybaseToken"/>
@@ -83,11 +83,15 @@
         <Filename Value="../../src/parsesql/ZSybaseAnalyser.pas"/>
         <UnitName Value="ZSybaseAnalyser"/>
       </Item16>
+      <Item17>
+        <Filename Value="../../src/parsesql/ZAdoToken.pas"/>
+        <UnitName Value="ZAdoToken"/>
+      </Item17>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>
         <PackageName Value="zcore"/>
-        <MinVersion Major="7" Minor="1" Valid="True"/>
+        <MinVersion Major="7" Minor="2" Valid="True"/>
       </Item1>
     </RequiredPkgs>
     <UsageOptions>
