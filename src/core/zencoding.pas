@@ -61,7 +61,9 @@ uses
   {$MACRO ON}
    LCLVersion, LConvEncoding,
   {$ENDIF}
-  LazUTF8,
+  {$IFDEF FPC_FULLVERSION<30000}
+  //LazUTF8,
+  {$ENDIF}
   {$IFDEF MSWINDOWS}
   Windows,
   {$ENDIF}
