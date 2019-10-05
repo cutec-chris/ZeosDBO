@@ -8,6 +8,7 @@
       <Version Value="11"/>
       <PathDelim Value="\"/>
       <SearchPaths>
+        <IncludeFiles Value="..\..\src\component"/>
         <OtherUnitFiles Value="..\..\src\component;lib\$(TargetCPU)-$(TargetOS)"/>
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)-$(LCLWidgetType)"/>
       </SearchPaths>
@@ -27,23 +28,23 @@
     <Version Major="7"/>
     <Files Count="5">
       <Item1>
-        <Filename Value="..\..\src\component\ZConnection.pas"/>
+        <Filename Value="..\..\src\component\zconnection.pas"/>
         <UnitName Value="ZConnection"/>
       </Item1>
       <Item2>
-        <Filename Value="..\..\src\component\ZDatasetUtils.pas"/>
+        <Filename Value="..\..\src\component\zdatasetutils.pas"/>
         <UnitName Value="ZDatasetUtils"/>
       </Item2>
       <Item3>
-        <Filename Value="..\..\src\component\ZSqlMetadata.pas"/>
+        <Filename Value="..\..\src\component\zsqlmetadata.pas"/>
         <UnitName Value="ZSqlMetadata"/>
       </Item3>
       <Item4>
-        <Filename Value="..\..\src\component\ZDataset.pas"/>
+        <Filename Value="..\..\src\component\zdataset.pas"/>
         <UnitName Value="ZDataset"/>
       </Item4>
       <Item5>
-        <Filename Value="..\..\src\component\ZSqlMonitor.pas"/>
+        <Filename Value="..\..\src\component\zsqlmonitor.pas"/>
         <UnitName Value="ZSqlMonitor"/>
       </Item5>
     </Files>
@@ -58,7 +59,6 @@
     </UsageOptions>
     <PublishOptions>
       <Version Value="2"/>
-      <IgnoreBinaries Value="False"/>
     </PublishOptions>
     <CustomOptions Items="ExternHelp" Version="2">
       <_ExternHelp Items="Count"/>
