@@ -53,7 +53,7 @@
 {.$DEFINE ZEOS_DISABLE_SQLITE}
 {.$DEFINE ZEOS_DISABLE_ORACLE}
 {.$DEFINE ZEOS_DISABLE_ASA}
-{.$DEFINE ZEOS_DISABLE_POOLED}
+{$DEFINE ZEOS_DISABLE_POOLED}
 
 {.$DEFINE WITH_ZSTRINGFIELDS}
 
@@ -410,7 +410,7 @@
 
 // Loads libcrypt.so before Firebird client library.
 // It fixes error "Undefined symbol: crypt".
-{$DEFINE INTERBASE_CRYPT}
+{.$DEFINE INTERBASE_CRYPT}
 
 // Excludes old ZeosDBO from the performance tests
 {$DEFINE EXCLUDE_OLD_ZEOS_TEST}

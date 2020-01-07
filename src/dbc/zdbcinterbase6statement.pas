@@ -262,7 +262,7 @@ begin
   ResultSetType := rtForwardOnly;
   FStmtHandle := 0;
   FZBufferSize := {$IFDEF UNICODE}UnicodeToUInt64Def{$ELSE}RawToUInt64Def{$ENDIF}(ZDbcUtils.DefineStatementParameter(Self, 'internal_buffer_size', ''), 131072); //128KB by default
-  FZBufferSize := Min(FZBufferSize, FIBConnection.GetXSQLDAMaxSize);
+  FZBufferSize := Min(Integer(FZBufferSize), Integer(FIBConnection.GetXSQLDAMaxSize));
 end;
 
 constructor TZInterbase6PreparedStatement.Create(const Connection: IZConnection;
